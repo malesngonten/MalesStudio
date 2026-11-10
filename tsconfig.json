@@ -1,0 +1,40 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "experimentalDecorators": true,
+    "useDefineForClassFields": false,
+    "module": "ESNext",
+    "types": ["vite/client"],
+    "lib": [
+      "ES2023",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "allowJs": true,
+    "jsx": "react-jsx",
+    "paths": {
+      "@/components/remocn/*": ["./src/remotion/elements/remocn/*", "./src/remotion/elements/remocn/*/index.tsx"],
+      "@/components/docs/examples/*": ["./src/remotion/elements/docs-examples/*"],
+      "@/registry/remocn-templates/*": ["./src/remotion/elements/remocn-templates/*"],
+      "@/registry/remocn-icons/*": ["./src/remotion/elements/remocn-icons/*"],
+      "@/registry/remocn-ui/*": ["./src/remotion/elements/remocn-ui/*"],
+      "@/registry/__manifest__": ["./src/remotion/elements/remocn-lib/__manifest__"],
+      "@/registry/__index__": ["./src/remotion/elements/remocn-lib/__index__"],
+      "@/lib/remocn-ui": ["./src/remotion/elements/remocn-lib/remocn-ui.ts", "./src/remotion/elements/remocn-lib/remocn-ui"],
+      "@/lib/remocn/*": ["./src/remotion/elements/remocn/*"],
+      "@/lib/*": ["./src/remotion/elements/remocn-lib/*"],
+      "@/registry/remocn/*": ["./src/remotion/elements/remocn/*", "./src/remotion/elements/remocn/*/index.tsx"],
+      "@/registry-artifacts/*": ["./src/remotion/elements/registry-artifacts/*"],
+      "@/*": [
+        "./*"
+      ]
+    },
+    "allowImportingTsExtensions": true,
+    "noEmit": true
+  },
+  "exclude": ["dist", "**/__tests__/**", "**/*.test.ts", "**/*.test.tsx"]
+}

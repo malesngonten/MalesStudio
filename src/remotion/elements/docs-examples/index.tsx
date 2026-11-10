@@ -1,0 +1,623 @@
+import type { ComponentType } from "react";
+import { FPS, H, W } from "@/lib/customizer-config";
+import type { BackdropFill } from "@/registry/remocn/backdrop";
+import {
+  AccordionExampleScene,
+  accordionExampleCode,
+} from "./accordion-example";
+import {
+  AlertDialogExampleScene,
+  alertDialogExampleCode,
+} from "./alert-dialog-example";
+import {
+  AsciiBackdropExampleScene,
+  AsciiBeatExampleScene,
+  AsciiResolveExampleScene,
+} from "./ascii-render-recipes";
+import { BlurInExampleScene, blurInExampleCode } from "./blur-in-example";
+import { ButtonExampleScene, buttonExampleCode } from "./button-example";
+import {
+  LensContributionExampleScene,
+  LensHandheldExampleScene,
+} from "./camera-lens-recipes";
+import { CheckboxExampleScene, checkboxExampleCode } from "./checkbox-example";
+import { ComboboxExampleScene, comboboxExampleCode } from "./combobox-example";
+import {
+  CommandMenuExampleScene,
+  commandMenuExampleCode,
+} from "./command-menu-example";
+import {
+  ContextMenuExampleScene,
+  contextMenuExampleCode,
+} from "./context-menu-example";
+import {
+  CrumpleTossExampleScene,
+  crumpleTossExampleCode,
+} from "./crumple-toss-example";
+import { CursorExampleScene, cursorExampleCode } from "./cursor-example";
+import { DialogExampleScene, dialogExampleCode } from "./dialog-example";
+import { DrawerExampleScene, drawerExampleCode } from "./drawer-example";
+import {
+  DropdownMenuExampleScene,
+  dropdownMenuExampleCode,
+} from "./dropdown-menu-example";
+import {
+  FadeThroughExampleScene,
+  fadeThroughExampleCode,
+} from "./fade-through-example";
+import {
+  HalftoneLiveExampleScene,
+  HalftoneRegisterExampleScene,
+  HalftoneResolveExampleScene,
+} from "./halftone-print-recipes";
+import {
+  HologramBootExampleScene,
+  HologramConsoleExampleScene,
+} from "./hologram-recipes";
+import { InputExampleScene, inputExampleCode } from "./input-example";
+import {
+  MessageBubbleExampleScene,
+  messageBubbleExampleCode,
+} from "./message-bubble-example";
+import {
+  PerWordCrossfadeExampleScene,
+  perWordCrossfadeExampleCode,
+} from "./per-word-crossfade-example";
+import { PopoverExampleScene, popoverExampleCode } from "./popover-example";
+import { ProgressExampleScene, progressExampleCode } from "./progress-example";
+import { RadioExampleScene, radioExampleCode } from "./radio-example";
+import {
+  ResizableExampleScene,
+  resizableExampleCode,
+} from "./resizable-example";
+import {
+  SecurityBitrateExampleScene,
+  SecurityColdOpenExampleScene,
+  SecurityFeedExampleScene,
+} from "./security-cam-recipes";
+import { SelectExampleScene, selectExampleCode } from "./select-example";
+import {
+  SelectMenuExampleScene,
+  selectMenuExampleCode,
+} from "./select-menu-example";
+import {
+  SharedAxisYExampleScene,
+  sharedAxisYExampleCode,
+} from "./shared-axis-y-example";
+import {
+  SharedAxisZExampleScene,
+  sharedAxisZExampleCode,
+} from "./shared-axis-z-example";
+import { SheetExampleScene, sheetExampleCode } from "./sheet-example";
+import { SkeletonExampleScene, skeletonExampleCode } from "./skeleton-example";
+import { SliderExampleScene, sliderExampleCode } from "./slider-example";
+import { StepperExampleScene, stepperExampleCode } from "./stepper-example";
+import { SwitchExampleScene, switchExampleCode } from "./switch-example";
+import { TabsExampleScene, tabsExampleCode } from "./tabs-example";
+import { ToastExampleScene, toastExampleCode } from "./toast-example";
+import {
+  ToggleGroupExampleScene,
+  toggleGroupExampleCode,
+} from "./toggle-group-example";
+import { TooltipExampleScene, tooltipExampleCode } from "./tooltip-example";
+import {
+  TypingIndicatorExampleScene,
+  typingIndicatorExampleCode,
+} from "./typing-indicator-example";
+import {
+  RippleBackdropExampleScene,
+  RippleSurfaceExampleScene,
+} from "./underwater-ripple-recipes";
+
+export interface ExampleEntry {
+  Component: ComponentType;
+  /**
+   * Vestigial after the LiveExample → UiComponentPreview migration. The Code tab
+   * now sources its template from `UI_SCENE_META[name].code` (the scene's own
+   * `…ExampleCode` function), so nothing reads this field anymore — it is kept
+   * only to avoid churn across all 26 entries. Safe to drop in a later cleanup.
+   * Migrated entries hold a function template; any legacy entry holds a string.
+   */
+  code: string | ((values: Record<string, unknown>) => string);
+  durationInFrames: number;
+  fps: number;
+  width: number;
+  height: number;
+  previewBackdrop?: BackdropFill;
+}
+
+export const examples: Record<string, ExampleEntry> = {
+  "crumple-toss-example": {
+    Component: CrumpleTossExampleScene,
+    code: crumpleTossExampleCode,
+    durationInFrames: 90,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "#f1eee7" },
+  },
+  "button-example": {
+    Component: ButtonExampleScene,
+    code: buttonExampleCode,
+    durationInFrames: 132,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "oklch(1 0 0)" },
+  },
+  "accordion-example": {
+    Component: AccordionExampleScene,
+    code: accordionExampleCode,
+    // Last transition (close) completes at frame 90; a short settle then loop.
+    durationInFrames: 100,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "oklch(1 0 0)" },
+  },
+  "alert-dialog-example": {
+    Component: AlertDialogExampleScene,
+    code: alertDialogExampleCode,
+    // Dialog closes at 92 + dur 12 = 104; a short settle then loop.
+    durationInFrames: 120,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "oklch(1 0 0)" },
+  },
+  "dialog-example": {
+    Component: DialogExampleScene,
+    code: dialogExampleCode,
+    // Dialog closes at 92 + dur 12 = 104; a short settle then loop.
+    durationInFrames: 120,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "oklch(1 0 0)" },
+  },
+  "sheet-example": {
+    Component: SheetExampleScene,
+    code: sheetExampleCode,
+    // Sheet closes at 92 + dur 12 = 104; a short settle then loop.
+    durationInFrames: 120,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "oklch(1 0 0)" },
+  },
+  "drawer-example": {
+    Component: DrawerExampleScene,
+    code: drawerExampleCode,
+    // Drawer closes at 92 + dur 12 = 104; a short settle then loop.
+    durationInFrames: 120,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "oklch(1 0 0)" },
+  },
+  "checkbox-example": {
+    Component: CheckboxExampleScene,
+    code: checkboxExampleCode,
+    durationInFrames: 100,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "oklch(1 0 0)" },
+  },
+  "radio-example": {
+    Component: RadioExampleScene,
+    code: radioExampleCode,
+    durationInFrames: 100,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "oklch(1 0 0)" },
+  },
+  "switch-example": {
+    Component: SwitchExampleScene,
+    code: switchExampleCode,
+    durationInFrames: 100,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "oklch(1 0 0)" },
+  },
+  "input-example": {
+    Component: InputExampleScene,
+    code: inputExampleCode,
+    durationInFrames: 120,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "oklch(1 0 0)" },
+  },
+  "select-example": {
+    Component: SelectExampleScene,
+    code: selectExampleCode,
+    // Panel closes at 96 + dur 12 = 108; a short settle then loop.
+    durationInFrames: 120,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "oklch(1 0 0)" },
+  },
+  "select-menu-example": {
+    Component: SelectMenuExampleScene,
+    code: selectMenuExampleCode,
+    // Longest cycle (selectedIndex=3): glide 0→3 (60+12), click, selected hold,
+    // check fade-off, then instant restart jump at 78+14+20+8 = 120.
+    durationInFrames: 128,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "oklch(1 0 0)" },
+  },
+  "dropdown-menu-example": {
+    Component: DropdownMenuExampleScene,
+    code: dropdownMenuExampleCode,
+    // Panel closes at 96 + dur 12 = 108; a short settle then loop.
+    durationInFrames: 120,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "oklch(1 0 0)" },
+  },
+  "tabs-example": {
+    Component: TabsExampleScene,
+    code: tabsExampleCode,
+    // Settings transition completes at 94 + dur 12 = 106; a short settle then loop.
+    durationInFrames: 120,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "oklch(1 0 0)" },
+  },
+  "cursor-example": {
+    Component: CursorExampleScene,
+    code: cursorExampleCode,
+    // success transition completes at 108 + dur 16 = 124; a short settle then loop.
+    durationInFrames: 140,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "oklch(1 0 0)" },
+  },
+  "toast-example": {
+    Component: ToastExampleScene,
+    code: toastExampleCode,
+    // Toast dismiss completes at 144 + dur 12 = 156; a short settle then loop.
+    durationInFrames: 170,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "oklch(1 0 0)" },
+  },
+  "message-bubble-example": {
+    Component: MessageBubbleExampleScene,
+    code: messageBubbleExampleCode,
+    // Bubble reveal 16 + reaction pop ~44 + settle, then loop.
+    durationInFrames: 90,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "oklch(1 0 0)" },
+  },
+  "typing-indicator-example": {
+    Component: TypingIndicatorExampleScene,
+    code: typingIndicatorExampleCode,
+    // Continuous loop; one bounce cycle is ~27 frames at 1.1 cps.
+    durationInFrames: 90,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "oklch(1 0 0)" },
+  },
+  "command-menu-example": {
+    Component: CommandMenuExampleScene,
+    code: commandMenuExampleCode,
+    // Panel closes at 108 + dur 12 = 120; a short settle then loop.
+    durationInFrames: 130,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "oklch(1 0 0)" },
+  },
+  "tooltip-example": {
+    Component: TooltipExampleScene,
+    code: tooltipExampleCode,
+    // Tooltip hides at 100 + dur 8 = 108; cursor parks at 110; a short settle then loop.
+    durationInFrames: 120,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "oklch(1 0 0)" },
+  },
+  "progress-example": {
+    Component: ProgressExampleScene,
+    code: progressExampleCode,
+    // Fill completes at 130 + dur 30 = 160; a short settle then loop.
+    durationInFrames: 160,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "oklch(1 0 0)" },
+  },
+  "skeleton-example": {
+    Component: SkeletonExampleScene,
+    code: skeletonExampleCode,
+    // ~3 shimmer cycles (180), crossfade completes at 180 + 16 = 196; a short
+    // settle on the revealed content then loop.
+    durationInFrames: 220,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "oklch(1 0 0)" },
+  },
+  "slider-example": {
+    Component: SliderExampleScene,
+    code: sliderExampleCode,
+    // Drag completes at 100; thumb releases at 108; a short settle then loop.
+    durationInFrames: 120,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "oklch(1 0 0)" },
+  },
+  "combobox-example": {
+    Component: ComboboxExampleScene,
+    code: comboboxExampleCode,
+    // Panel closes at 100 + dur 12 = 112; a short settle then loop.
+    durationInFrames: 120,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "oklch(1 0 0)" },
+  },
+  "popover-example": {
+    Component: PopoverExampleScene,
+    code: popoverExampleCode,
+    // Popover closes at 100 + dur 10 = 110; cursor parks at 110; short settle then loop.
+    durationInFrames: 130,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "oklch(1 0 0)" },
+  },
+  "context-menu-example": {
+    Component: ContextMenuExampleScene,
+    code: contextMenuExampleCode,
+    // Cursor selects row 1, menu closes at 102, cursor leaves (arrives 104+20=124);
+    // a short settle then loop.
+    durationInFrames: 135,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "oklch(1 0 0)" },
+  },
+  "toggle-group-example": {
+    Component: ToggleGroupExampleScene,
+    code: toggleGroupExampleCode,
+    // Second toggle completes at 92 + dur 14 = 106; a short settle then loop.
+    durationInFrames: 115,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "oklch(1 0 0)" },
+  },
+  "stepper-example": {
+    Component: StepperExampleScene,
+    code: stepperExampleCode,
+    // Final step (index 2) ease completes at 110 + 24 = 134; a short settle then loop.
+    durationInFrames: 150,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "oklch(1 0 0)" },
+  },
+  "resizable-example": {
+    Component: ResizableExampleScene,
+    code: resizableExampleCode,
+    // Sweep right→left→center ends at 176; handle idle at 184+8=192; settle then loop.
+    durationInFrames: 205,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "oklch(1 0 0)" },
+  },
+  "blur-in-example": {
+    Component: BlurInExampleScene,
+    code: blurInExampleCode,
+    // Reveal completes at 8 + dur 18 = 26; a short settle then loop.
+    durationInFrames: 40,
+    fps: FPS,
+    width: W,
+    height: H,
+  },
+  "fade-through-example": {
+    Component: FadeThroughExampleScene,
+    code: fadeThroughExampleCode,
+    // Two chained A→B transitions, 40 frames each — tight delay for a dynamic feel.
+    durationInFrames: 80,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "#ffffff" },
+  },
+  "shared-axis-y-example": {
+    Component: SharedAxisYExampleScene,
+    code: sharedAxisYExampleCode,
+    // Two chained A→B transitions, 40 frames each — tight delay for a dynamic feel.
+    durationInFrames: 80,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "#ffffff" },
+  },
+  "shared-axis-z-example": {
+    Component: SharedAxisZExampleScene,
+    code: sharedAxisZExampleCode,
+    // Two chained A→B transitions, 40 frames each — tight delay for a dynamic feel.
+    durationInFrames: 80,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "#ffffff" },
+  },
+  "per-word-crossfade-example": {
+    Component: PerWordCrossfadeExampleScene,
+    code: perWordCrossfadeExampleCode,
+    // Two chained A→B transitions, 50 frames each — slower enter needs a touch more room.
+    durationInFrames: 100,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "#ffffff" },
+  },
+  "ascii-resolve-example": {
+    Component: AsciiResolveExampleScene,
+    code: "<AsciiRender intensity={intensity} glyphSize={glyphSize} />",
+    // Resolves out of text by frame 34, holds clean, then returns so the loop closes.
+    durationInFrames: 96,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "#0a0a0a" },
+  },
+  "ascii-beat-example": {
+    Component: AsciiBeatExampleScene,
+    code: "<AsciiRender intensity={intensity} glyphSize={24} />",
+    // Two punches, at frames 18–32 and 56–70, clean everywhere else.
+    durationInFrames: 90,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "#0a0a0a" },
+  },
+  "ascii-backdrop-example": {
+    Component: AsciiBackdropExampleScene,
+    code: '<AsciiRender glyphSize={18} ink="#2f7a52" />',
+    // The wrapped field completes exactly two wave cycles over these 90 frames.
+    durationInFrames: 90,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "#0a0a0a" },
+  },
+  "halftone-register-example": {
+    Component: HalftoneRegisterExampleScene,
+    code: "<HalftonePrint misregistration={misregistration} />",
+    // Plates pull into register by frame 36, hold, then drift back so the loop closes.
+    durationInFrames: 90,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "#26231d" },
+  },
+  "halftone-resolve-example": {
+    Component: HalftoneResolveExampleScene,
+    code: "<HalftonePrint dotSize={dotSize} />",
+    // Newsprint at frame 0 down to fine offset by frame 40, then back for the loop.
+    durationInFrames: 90,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "#26231d" },
+  },
+  "halftone-live-example": {
+    Component: HalftoneLiveExampleScene,
+    code: "<HalftonePrint dotSize={12} />",
+    // The picture pans one full sine cycle over these 90 frames; the screen never moves.
+    durationInFrames: 90,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "#26231d" },
+  },
+  "ripple-surface-example": {
+    Component: RippleSurfaceExampleScene,
+    code: "<UnderwaterRipple amplitude={amplitude} speed={3} />",
+    // Settles to still water by frame 46, holds, then sinks back so the loop closes.
+    durationInFrames: 120,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "#06171c" },
+  },
+  "lens-contribution-example": {
+    Component: LensContributionExampleScene,
+    code: "<CameraLens softness={0.5} bloom={0.5} aberration={0.5} />",
+    // Ramps the whole lens on and back off so the contribution is visible.
+    durationInFrames: 96,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "#0a0a0a" },
+  },
+  "hologram-console-example": {
+    Component: HologramConsoleExampleScene,
+    code: "<Hologram><HudFrame><Scene /></HudFrame></Hologram>",
+    durationInFrames: 90,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "#04070d" },
+  },
+  "hologram-boot-example": {
+    Component: HologramBootExampleScene,
+    code: "<Hologram ghost={ghost} flicker={flicker} />",
+    // Instability settles by frame 34, holds, then returns so the loop closes.
+    durationInFrames: 96,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "#04070d" },
+  },
+  "security-cold-open-example": {
+    Component: SecurityColdOpenExampleScene,
+    code: "<SecurityCam intensity={intensity} />",
+    // Surveillance holds, cuts to the clean scene at 44, returns so the loop closes.
+    durationInFrames: 90,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "#0a0a0a" },
+  },
+  "security-feed-example": {
+    Component: SecurityFeedExampleScene,
+    code: "<SecurityCam><Scene /><CameraOsd /></SecurityCam>",
+    durationInFrames: 120,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "#0a0a0a" },
+  },
+  "security-bitrate-example": {
+    Component: SecurityBitrateExampleScene,
+    code: "<SecurityCam compression={starve} blockSize={block} />",
+    // Bitrate collapses by frame 36, holds, then recovers for the loop.
+    durationInFrames: 96,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "#0a0a0a" },
+  },
+  "lens-handheld-example": {
+    Component: LensHandheldExampleScene,
+    code: "<CameraLens><Drift grow={0.06} /></CameraLens>",
+    durationInFrames: 120,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "#0a0a0a" },
+  },
+  "ripple-backdrop-example": {
+    Component: RippleBackdropExampleScene,
+    code: "<UnderwaterRipple amplitude={14} scale={0.8} speed={2} />",
+    // speed=2 over 120 frames is a whole number of cycles, so the water loops seamlessly.
+    durationInFrames: 120,
+    fps: FPS,
+    width: W,
+    height: H,
+    previewBackdrop: { type: "color", value: "#06171c" },
+  },
+};

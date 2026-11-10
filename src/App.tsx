@@ -1,0 +1,613 @@
+import React, { useState, useCallback } from 'react';
+import {
+  useStudioState,
+  INITIAL_STUDIO_TIMELINE,
+} from './state/useStudioState';
+import { Header, StudioView } from './components/header/Header';
+import { RemotionPreview } from './components/player/RemotionPreview';
+import { ChatPanel } from './components/chat/ChatPanel';
+import { StoryboardView } from './components/storyboard/StoryboardView';
+import { CodeEditorPanel } from './components/code/CodeEditorPanel';
+import { AssetTab } from './components/assets/AssetTab';
+import { RenderTab } from './components/render/RenderTab';
+import { AgentDiscoveryDrawer } from './components/agent/AgentDiscoveryDrawer';
+import { ChatHistorySheet } from './components/history/ChatHistorySheet';
+import { BottomSheet } from './components/ui/BottomSheet';
+import { ProjectAsset, TimelineClip, TimelineLayer } from './types';
+import { Timeline } from './components/timeline/Timeline';
+import { BottomToolbar } from './components/toolbar/BottomToolbar';
+import { UnifiedSettingsSheet } from './components/settings/UnifiedSettingsSheet';
+import { Toast } from './components/ui/Toast';
+import { studioWorkspace } from './services/WorkspaceService';
+import { ElementLibrarySheet } from './components/elements/ElementLibrarySheet';
+import {
+  getInstalledElementSlugs,
+  saveInstalledElementSlugs,
+} from './remotion/elements/registry';
+import { RemotionElementDefinition, ElementCategory } from './remotion/elements/types';
+import {
+  useAutoSaveWorkspace,
+  loadSavedFilesState,
+  FILES_STORAGE_KEY,
+} from './hooks/useAutoSaveWorkspace';
+import { X, Sparkles, MessageSquare } from 'lucide-react';
+
+const COMPOSITION_SAMPLE_CODE = `// ShortVideoComposition.tsx
+// Powered by Remotion v4.0 & Males Ngonten Studio AI Agent
+
+import React from 'react';
+import { AbsoluteFill, useCurrentFrame, useVideoConfig } from 'remotion';
+
+export const ShortVideoComposition: React.FC = () => {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+
+  return (
+    <AbsoluteFill className="bg-black select-none overflow-hidden font-sans">
+      {/* Dynamic Ambient Background */}
+      <div className="absolute inset-0 bg-gradient-to-b from-[#201315] to-[#0d0c10]" />
+      
+      {/* Title */}
+      <div className="absolute inset-0 flex flex-col items-center justify-center p-8 text-center">
+        <h1 className="text-4xl font-extrabold text-white tracking-tight drop-shadow-lg">
+          Males Ngonten Studio 🐱
+        </h1>
+        <p className="text-xl text-[#e5484d] font-semibold mt-4">
+          AI Coding Agent Video Engine
+        </p>
+      </div>
+    </AbsoluteFill>
+  );
+};
+`;
+
+export default function App() {
+  const {
+    timeline,
+    setTimeline,
+    currentFrame,
+    setCurrentFrame,
+    isPlaying,
+    setIsPlaying,
+    selectedClipId,
+    selectedLayerId,
+    selectedClip,
+    selectedLayer,
+    agentStatus,
+    sessions,
+    activeSessionId,
+    messages,
+    activeToolCalls,
+    assets,
+    setAssets,
+    currentRenderJob,
+    completedRenderJobs,
+    handleStartRender,
+    handleCancelRender,
+    handleDeleteRender,
+    handleUpdateClipPosition,
+    handleUpdateClipTiming,
+    handleSelectClip,
+    handleSendMessage,
+    handleStopAgent,
+    handleSwitchSession,
+    handleNewChat,
+    handleDeleteSession,
+    agentSettings,
+    handleUpdateSettings,
+    handleResetStudio,
+    isBackendAvailable,
+    streamingMessageId,
+    toast,
+    showToast,
+    hideToast,
+    handleChangeAspectRatio,
+    handleInsertTimelineClip,
+  } = useStudioState();
+
+  // Handle client-side render complete (blob URL from browser)
+  const handleClientRenderComplete = useCallback((blobUrl: string, fileName: string, size: number) => {
+    showToast(`Render client-side selesai: ${fileName} (${(size / 1024 / 1024).toFixed(2)} MB)`);
+  }, [showToast]);
+
+  // Timeline overlay visibility & resizable height (floating sheet on top of player)
+  const [isTimelineVisible, setIsTimelineVisible] = useState<boolean>(false);
+  const [timelineHeight, setTimelineHeight] = useState<number>(190);
+  const [isDraggingTimeline, setIsDraggingTimeline] = useState<boolean>(false);
+
+  // Overlay sheets — Remotion Player stays visible behind these
+  const [isChatSheetOpen, setIsChatSheetOpen] = useState<boolean>(false);
+  const [isCodeSheetOpen, setIsCodeSheetOpen] = useState<boolean>(false);
+  const [isAssetSheetOpen, setIsAssetSheetOpen] = useState<boolean>(false);
+  const [isStoryboardSheetOpen, setIsStoryboardSheetOpen] = useState<boolean>(false);
+  const [isElementSheetOpen, setIsElementSheetOpen] = useState<boolean>(false);
+  const [elementLibraryCategory, setElementLibraryCategory] = useState<'all' | ElementCategory>('all');
+  const [installedElementSlugs, setInstalledElementSlugs] = useState<string[]>(() =>
+    getInstalledElementSlugs()
+  );
+
+  // Modals / Drawers
+  const [isRenderOpen, setIsRenderOpen] = useState(false);
+  const [isAgentDrawerOpen, setIsAgentDrawerOpen] = useState(false);
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isAiSettingsOpen, setIsAiSettingsOpen] = useState(false);
+
+  // Pre-filled prompt from canvas element action
+  const [prefilledPrompt, setPrefilledPrompt] = useState<string>('');
+
+  // Code editor state (hydrated from localStorage if available)
+  const [activeFile, setActiveFile] = useState('ShortVideoComposition.tsx');
+  const [filesState, setFilesState] = useState<Record<string, string>>(() =>
+    loadSavedFilesState({
+      'ShortVideoComposition.tsx': COMPOSITION_SAMPLE_CODE,
+      'timeline.json': JSON.stringify(timeline, null, 2),
+      'GEMINI.md': '# ATURAN PROYEK MALES NGONTEN STUDIO\n1. Format 9:16 portrait (1080x1920)\n2. Pacing cepat 1.5 - 2.5 detik per klip\n3. Animasi spring dengan damping Remotion.',
+    })
+  );
+
+  // Periodically save timeline & filesState to localStorage
+  useAutoSaveWorkspace(timeline, filesState, 5000);
+
+  // Install Element TSX to workspace files & persist
+  const handleInstallElementToWorkspace = useCallback(
+    (element: RemotionElementDefinition) => {
+      const fileName = `${element.slug}.element.tsx`;
+      setFilesState((prev) => ({
+        ...prev,
+        [fileName]: element.sourceCode,
+      }));
+      setInstalledElementSlugs((prev) => {
+        if (prev.includes(element.slug)) return prev;
+        const updated = [...prev, element.slug];
+        saveInstalledElementSlugs(updated);
+        return updated;
+      });
+      fetch(`/api/files/${encodeURIComponent(fileName)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: element.sourceCode }),
+      }).catch(() => {});
+      showToast(`Komponen "${element.displayName}" berhasil dipasang ke proyek Remotion!`);
+    },
+    [showToast]
+  );
+
+  // Play/pause toggle
+  const handlePlayPauseToggle = useCallback(() => {
+    setIsPlaying((prev) => !prev);
+  }, [setIsPlaying]);
+
+  // Frame scrub
+  const handleFrameUpdate = useCallback((frame: number) => {
+    setCurrentFrame(frame);
+  }, [setCurrentFrame]);
+
+  // Timeline toggle
+  const handleToggleTimeline = useCallback(() => {
+    setIsTimelineVisible((prev) => !prev);
+  }, []);
+
+  // Handle timeline clip props update
+  const handleUpdateClipProps = useCallback(
+    (layerId: string, clipId: string, updatedProps: any) => {
+      setTimeline((prev) => {
+        const nextLayers = prev.layers.map((l) => {
+          if (l.id !== layerId) return l;
+          return {
+            ...l,
+            clips: l.clips.map((c) => {
+              if (c.id !== clipId) return c;
+              const newElementProps = updatedProps.elementProps
+                ? { ...c.elementProps, ...updatedProps.elementProps }
+                : (c.elementSlug ? { ...c.elementProps, ...updatedProps } : c.elementProps);
+              return {
+                ...c,
+                props: { ...c.props, ...updatedProps },
+                elementProps: newElementProps,
+              };
+            }),
+          };
+        });
+        const next = { ...prev, layers: nextLayers };
+        try {
+          localStorage.setItem('males_ngonten_timeline', JSON.stringify(next));
+          studioWorkspace.saveTimeline(next);
+        } catch {}
+        return next;
+      });
+    },
+    [setTimeline]
+  );
+
+  // Handle delete clip
+  const handleDeleteClip = useCallback(
+    (layerId: string, clipId: string) => {
+      setTimeline((prev) => {
+        const nextLayers = prev.layers.map((l) => {
+          if (l.id !== layerId) return l;
+          return {
+            ...l,
+            clips: l.clips.filter((c) => c.id !== clipId),
+          };
+        });
+        return { ...prev, layers: nextLayers };
+      });
+    },
+    [setTimeline]
+  );
+
+  // Real Asset upload to backend storage & assets.json
+  const handleUploadAssets = useCallback(
+    async (newFiles: File[]) => {
+      try {
+        const updated = await studioWorkspace.uploadAssets(newFiles);
+        setAssets(updated);
+      } catch (e) {
+        console.error('Failed to upload asset files to server:', e);
+        showToast('Gagal mengunggah aset. Silakan coba lagi.');
+      }
+    },
+    [setAssets, showToast]
+  );
+
+  const activeSession = sessions.find((s) => s.id === activeSessionId);
+  const currentSec = (currentFrame / timeline.fps).toFixed(2);
+  const totalAssetsSize = assets.reduce((sum, a) => sum + (a.size || 0), 0);
+
+  const isAgentActive =
+    agentStatus === 'thinking' ||
+    agentStatus === 'executing_tool' ||
+    agentStatus === 'streaming' ||
+    activeToolCalls.some((t) => t.status === 'running');
+
+  return (
+    <div className="w-full h-dvh max-h-dvh flex flex-col bg-[#09090b] text-[#f4f4f5] antialiased overflow-hidden select-none font-sans">
+      {/* 1. Icon-Only Clean Header */}
+      <Header
+        onOpenRender={() => setIsRenderOpen(true)}
+        isRendering={!!currentRenderJob}
+        agentStatus={agentStatus}
+      />
+
+      {/* 2. MAIN LAYER: Remotion Player — SELALU VISIBLE sebagai background utama */}
+      <div className="flex-1 min-h-0 overflow-hidden relative bg-[#070709] pb-[80px]">
+        {/* Remotion Player — penuh di belakang semua overlay */}
+        <RemotionPreview
+          timeline={timeline}
+          currentFrame={currentFrame}
+          onFrameUpdate={handleFrameUpdate}
+          isPlaying={isPlaying}
+          onPlayPauseToggle={handlePlayPauseToggle}
+          selectedClipId={selectedClipId}
+          onSelectClip={handleSelectClip}
+          onUpdateClipPosition={handleUpdateClipPosition}
+          onPromptElementAction={(text, action) => {
+            setPrefilledPrompt(`Tolong ubah elemen "${text}": ${action}`);
+            setIsChatSheetOpen(true);
+          }}
+          isTimelineOpen={isTimelineVisible}
+          onToggleTimeline={handleToggleTimeline}
+          onChangeAspectRatio={handleChangeAspectRatio}
+        />
+
+        {/* Timeline overlay (float on top of player, bottom area, draggable top edge) */}
+        {isTimelineVisible && (
+          <div
+            style={{ height: `${timelineHeight}px` }}
+            className={`absolute bottom-[80px] left-0 right-0 flex flex-col overflow-hidden bg-gradient-to-b from-[#14141c]/95 to-[#0a0a0e]/95 backdrop-blur-md z-30 shadow-2xl ${
+              isDraggingTimeline ? '' : 'transition-[height] duration-150 ease-out'
+            }`}
+          >
+            {/* Unified Top-Edge & Header Title Drag Handle for Resizing Timeline */}
+            <div
+              onPointerDown={(e) => {
+                e.preventDefault();
+                e.currentTarget.setPointerCapture(e.pointerId);
+                setIsDraggingTimeline(true);
+                const startY = e.clientY;
+                const startH = timelineHeight;
+                const onMove = (ev: PointerEvent) => {
+                  const delta = startY - ev.clientY;
+                  const next = Math.max(120, Math.min(440, startH + delta));
+                  setTimelineHeight(next);
+                };
+                const onUp = () => {
+                  setIsDraggingTimeline(false);
+                  window.removeEventListener('pointermove', onMove);
+                  window.removeEventListener('pointerup', onUp);
+                  window.removeEventListener('pointercancel', onUp);
+                };
+                window.addEventListener('pointermove', onMove);
+                window.addEventListener('pointerup', onUp);
+                window.addEventListener('pointercancel', onUp);
+              }}
+              className="w-full cursor-ns-resize touch-none select-none shrink-0 group"
+              title="Geser area header ini ke atas/bawah untuk ubah tinggi timeline"
+            >
+              <div className="w-full pt-2 pb-1 flex flex-col items-center">
+                <div
+                  className={`w-10 h-1 rounded-full transition-colors ${
+                    isDraggingTimeline ? 'bg-[#ff1744]' : 'bg-white/25 group-hover:bg-white/45'
+                  }`}
+                />
+              </div>
+
+              <div className="flex items-center justify-between px-3 pb-1.5 text-xs text-zinc-400">
+                <span className="font-semibold text-white">Track Timeline</span>
+                <button
+                  type="button"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() => setIsTimelineVisible(false)}
+                  className="tap w-6 h-6 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
+                  title="Tutup Timeline"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-2 pb-2">
+              <Timeline
+                timeline={timeline}
+                currentFrame={currentFrame}
+                onSeek={handleFrameUpdate}
+                selectedClipId={selectedClipId}
+                onSelectClip={(clip, layer) => handleSelectClip(layer.id, clip.id)}
+                onUpdateClipTiming={handleUpdateClipTiming}
+              />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Pemberitahuan operasi — muncul di atas semua layar */}
+      <Toast open={!!toast} message={toast?.message ?? ''} onClose={hideToast} />
+
+      {/* 3. OVERLAY SHEETS — muncul di atas Remotion Player, tidak menutupnya sepenuhnya */}
+
+      {/* Chat History Drawer */}
+      <ChatHistorySheet
+        isOpen={isHistoryOpen}
+        onClose={() => setIsHistoryOpen(false)}
+        sessions={sessions}
+        activeSessionId={activeSessionId}
+        onSelectSession={handleSwitchSession}
+        onNewChat={handleNewChat}
+        onDeleteSession={handleDeleteSession}
+      />
+
+      {/* Agent Discovery & ARM64 Diagnostics Drawer */}
+      <AgentDiscoveryDrawer
+        isOpen={isAgentDrawerOpen}
+        onClose={() => setIsAgentDrawerOpen(false)}
+      />
+
+      {/* Render & Export Video Modal */}
+      <BottomSheet
+        isOpen={isRenderOpen}
+        onClose={() => setIsRenderOpen(false)}
+        title="Ekspor Video Remotion MP4"
+        subtitle="Rendering deterministik lokal via Remotion CLI"
+      >
+        <RenderTab
+          currentJob={currentRenderJob}
+          completedJobs={completedRenderJobs}
+          onStartRender={handleStartRender}
+          onCancelRender={handleCancelRender}
+          onDeleteRender={handleDeleteRender}
+          timeline={timeline}
+          onClientRenderComplete={handleClientRenderComplete}
+          onOpenElementLibrary={(cat) => {
+            setElementLibraryCategory(cat || 'Komponen Pengguna');
+            setIsRenderOpen(false);
+            setIsElementSheetOpen(true);
+          }}
+        />
+      </BottomSheet>
+
+      {/* Chat / Obrolan Sheet — overlay di atas player, bisa di-drag untuk mengubah tinggi */}
+      <BottomSheet
+        isOpen={isChatSheetOpen}
+        onClose={() => setIsChatSheetOpen(false)}
+        title="Obrolan AI"
+        subtitle="Ketik perintah untuk mengedit dan merender video Remotion"
+        noPadding
+      >
+        <div className="flex-1 flex flex-col min-h-0 w-full overflow-hidden">
+          <ChatPanel
+            messages={messages}
+            isAgentWorking={
+              agentStatus === 'thinking' ||
+              agentStatus === 'executing_tool' ||
+              agentStatus === 'streaming'
+            }
+            onSendMessage={handleSendMessage}
+            onStopAgent={handleStopAgent}
+            currentSec={currentSec}
+            selectedClipName={selectedClip?.name}
+            selectedClip={selectedClip}
+            selectedLayer={selectedLayer}
+            onClearSelectedClip={() => handleSelectClip('', '')}
+            prefilledPrompt={prefilledPrompt}
+            onClose={() => setIsChatSheetOpen(false)}
+            onOpenSettings={() => {
+              setIsChatSheetOpen(false);
+              setIsSettingsOpen(true);
+            }}
+            byokModelId={agentSettings.modelId}
+            isByokConfigured={Boolean(agentSettings.apiBaseUrl && agentSettings.modelId)}
+            streamingMessageId={streamingMessageId}
+            activeToolCalls={activeToolCalls}
+          />
+        </div>
+      </BottomSheet>
+
+      {/* Code Editor Sheet — overlay di atas player */}
+      <BottomSheet
+        isOpen={isCodeSheetOpen}
+        onClose={() => setIsCodeSheetOpen(false)}
+        title="Kode Remotion TSX"
+        subtitle="Edit komposisi video secara deklaratif"
+        noPadding
+      >
+        <div className="flex-1 flex flex-col min-h-0 w-full overflow-hidden">
+          <CodeEditorPanel
+            files={filesState}
+            activeFile={activeFile}
+            onSelectFile={(f) => setActiveFile(f)}
+            onSaveFile={(f, content) =>
+              setFilesState((prev) => ({ ...prev, [f]: content }))
+            }
+            isAgentEditingFile={agentStatus !== 'idle'}
+          />
+        </div>
+      </BottomSheet>
+
+      {/* Asset Manager Sheet — overlay di atas player */}
+      <BottomSheet
+        isOpen={isAssetSheetOpen}
+        onClose={() => setIsAssetSheetOpen(false)}
+        title="Aset Media"
+        subtitle="Gambar, video, audio, dan font untuk video Anda"
+        noPadding
+      >
+        <AssetTab
+          assets={assets}
+          onUploadAssets={handleUploadAssets}
+          onDeleteAsset={async (id) => {
+            try {
+              const updated = await studioWorkspace.deleteAsset(id);
+              setAssets(updated);
+            } catch (e) {
+              console.error('Failed to delete asset on server:', e);
+              showToast('Gagal menghapus aset. Aset tetap ada dan data tidak berubah.');
+            }
+          }}
+          onUseAssetInChat={(asset: ProjectAsset) => {
+            setIsChatSheetOpen(true);
+            handleSendMessage(
+              `Tolong gunakan aset media "${asset.name}" sebagai background di video`,
+              []
+            );
+          }}
+          usedBytes={totalAssetsSize}
+          maxBytes={500 * 1024 * 1024}
+        />
+      </BottomSheet>
+
+      {/* Storyboard Sheet — overlay di atas player */}
+      <BottomSheet
+        isOpen={isStoryboardSheetOpen}
+        onClose={() => setIsStoryboardSheetOpen(false)}
+        title="Storyboard & Scene Cards"
+        subtitle="Atur urutan adegan dan klip video"
+        noPadding
+      >
+        <div className="flex-1 flex flex-col min-h-0 w-full overflow-hidden">
+          <StoryboardView
+            timeline={timeline}
+            currentFrame={currentFrame}
+            onSeek={handleFrameUpdate}
+            selectedClip={selectedClip}
+            selectedLayer={selectedLayer}
+            onSelectClip={(clip: TimelineClip, layer: TimelineLayer) =>
+              handleSelectClip(layer.id, clip.id)
+            }
+            onAddLayerClick={() => {}}
+            onUpdateClipProps={handleUpdateClipProps}
+            onUpdateClipTiming={handleUpdateClipTiming}
+            onDeleteClip={handleDeleteClip}
+            onCommandAI={(prompt) => {
+              setIsChatSheetOpen(true);
+              setPrefilledPrompt(prompt);
+            }}
+          />
+        </div>
+      </BottomSheet>
+
+      {/* Comprehensive Application Settings Sheet */}
+      <UnifiedSettingsSheet
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        settings={agentSettings}
+        onUpdateSettings={handleUpdateSettings}
+        projectRules={filesState['GEMINI.md']}
+        onUpdateProjectRules={(rules) =>
+          setFilesState((prev) => ({ ...prev, ['GEMINI.md']: rules }))
+        }
+        onResetAll={() => {
+          handleResetStudio();
+          try {
+            localStorage.removeItem(FILES_STORAGE_KEY);
+          } catch {}
+          setPrefilledPrompt('');
+          setActiveFile('ShortVideoComposition.tsx');
+          setFilesState({
+            'ShortVideoComposition.tsx': COMPOSITION_SAMPLE_CODE,
+            'timeline.json': JSON.stringify(INITIAL_STUDIO_TIMELINE, null, 2),
+            'GEMINI.md': '# ATURAN PROYEK MALES NGONTEN STUDIO\n1. Format 9:16 portrait (1080x1920)\n2. Pacing cepat 1.5 - 2.5 detik per klip\n3. Animasi spring dengan damping Remotion.',
+          });
+          setIsTimelineVisible(false);
+          setIsChatSheetOpen(false);
+          setIsRenderOpen(false);
+          setIsAgentDrawerOpen(false);
+          setIsHistoryOpen(false);
+          setIsAiSettingsOpen(false);
+        }}
+      />
+
+      {/* Reusable Element Library Sheet — overlay di atas player */}
+      <BottomSheet
+        isOpen={isElementSheetOpen}
+        onClose={() => setIsElementSheetOpen(false)}
+        title="Reusable Element Library"
+        subtitle="Koleksi komponen video Remotion siap pakai dengan Live Preview & Props Editor"
+        noPadding
+      >
+        <div className="flex-1 flex flex-col min-h-0 w-full overflow-hidden">
+          <ElementLibrarySheet
+            timeline={timeline}
+            onInsertElementToTimeline={(clip, layerName) => {
+              handleInsertTimelineClip(clip, layerName);
+              setIsElementSheetOpen(false);
+            }}
+            onInstallElementToWorkspace={handleInstallElementToWorkspace}
+            installedSlugs={installedElementSlugs}
+            onOpenCodeEditor={(f) => {
+              setActiveFile(f);
+              setIsElementSheetOpen(false);
+              setIsCodeSheetOpen(true);
+            }}
+            onOpenRender={() => {
+              setIsElementSheetOpen(false);
+              setIsRenderOpen(true);
+            }}
+            initialCategory={elementLibraryCategory}
+          />
+        </div>
+      </BottomSheet>
+
+      {/* 4. Fixed Bottom Navigation Bar — tombol fitur buka overlay sheet */}
+      <BottomToolbar
+        isChatOpen={isChatSheetOpen}
+        onToggleChat={() => setIsChatSheetOpen((prev) => !prev)}
+        isTimelineVisible={isTimelineVisible}
+        onToggleTimeline={handleToggleTimeline}
+        sessionsCount={sessions.length}
+        onOpenChatHistory={() => setIsHistoryOpen(true)}
+        onOpenSettings={() => setIsSettingsOpen(true)}
+        isAiConfigured={Boolean(agentSettings.apiBaseUrl && agentSettings.modelId)}
+        isBackendAvailable={isBackendAvailable}
+        isCodeOpen={isCodeSheetOpen}
+        onToggleCode={() => setIsCodeSheetOpen((prev) => !prev)}
+        isAssetOpen={isAssetSheetOpen}
+        onToggleAsset={() => setIsAssetSheetOpen((prev) => !prev)}
+        isStoryboardOpen={isStoryboardSheetOpen}
+        onToggleStoryboard={() => setIsStoryboardSheetOpen((prev) => !prev)}
+        isElementOpen={isElementSheetOpen}
+        onToggleElement={() => setIsElementSheetOpen((prev) => !prev)}
+      />
+    </div>
+  );
+}
