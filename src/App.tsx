@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import {
   useStudioState,
   INITIAL_STUDIO_TIMELINE,
@@ -114,6 +114,53 @@ export default function App() {
   const [isTimelineVisible, setIsTimelineVisible] = useState<boolean>(false);
   const [timelineHeight, setTimelineHeight] = useState<number>(190);
   const [isDraggingTimeline, setIsDraggingTimeline] = useState<boolean>(false);
+
+  // Vertical split layout: Player (top) <-> Divider <-> Chat (bottom)
+  const [splitPlayerVh, setSplitPlayerVh] = useState<number>(55);
+  const [isDraggingSplit, setIsDraggingSplit] = useState<boolean>(false);
+  const splitDragStartRef = useRef<{ startY: number; startVh: number } | null>(null);
+
+  const PLAYER_MIN_VH = 0;
+  const PLAYER_MAX_VH = 70;
+
+  const handleSplitPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      e.stopPropagation();
+      e.currentTarget.setPointerCapture(e.pointerId);
+      setIsDraggingSplit(true);
+      splitDragStartRef.current = {
+        startY: e.clientY,
+        startVh: splitPlayerVh,
+      };
+    },
+    [splitPlayerVh]
+  );
+
+  const handleSplitPointerMove = useCallback(
+    (ev: React.PointerEvent<HTMLDivElement>) => {
+      if (!splitDragStartRef.current) return;
+      const deltaY = ev.clientY - splitDragStartRef.current.startY;
+      const viewportH = window.innerHeight || 800;
+      const deltaVh = (deltaY / viewportH) * 100;
+      let nextVh = splitDragStartRef.current.startVh + deltaVh;
+      nextVh = Math.max(PLAYER_MIN_VH, Math.min(nextVh, PLAYER_MAX_VH));
+      setSplitPlayerVh(nextVh);
+    },
+    [splitPlayerVh]
+  );
+
+  const handleSplitPointerUp = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!splitDragStartRef.current) return;
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {}
+      splitDragStartRef.current = null;
+      setIsDraggingSplit(false);
+    },
+    []
+  );
 
   // Overlay sheets — Remotion Player stays visible behind these
   const [isChatSheetOpen, setIsChatSheetOpen] = useState<boolean>(false);
@@ -267,29 +314,79 @@ export default function App() {
       <Header
         onOpenRender={() => setIsRenderOpen(true)}
         isRendering={!!currentRenderJob}
-        agentStatus={agentStatus}
       />
 
-      {/* 2. MAIN LAYER: Remotion Player — SELALU VISIBLE sebagai background utama */}
-      <div className="flex-1 min-h-0 overflow-hidden relative bg-[#070709] pb-[80px]">
-        {/* Remotion Player — penuh di belakang semua overlay */}
-        <RemotionPreview
-          timeline={timeline}
-          currentFrame={currentFrame}
-          onFrameUpdate={handleFrameUpdate}
-          isPlaying={isPlaying}
-          onPlayPauseToggle={handlePlayPauseToggle}
-          selectedClipId={selectedClipId}
-          onSelectClip={handleSelectClip}
-          onUpdateClipPosition={handleUpdateClipPosition}
-          onPromptElementAction={(text, action) => {
-            setPrefilledPrompt(`Tolong ubah elemen "${text}": ${action}`);
-            setIsChatSheetOpen(true);
-          }}
-          isTimelineOpen={isTimelineVisible}
-          onToggleTimeline={handleToggleTimeline}
-          onChangeAspectRatio={handleChangeAspectRatio}
-        />
+      {/* 2. SPLIT LAYOUT: Remotion Player (atas) | Divider (drag) | AI Chat (bawah) */}
+      <div className="flex-1 min-h-0 flex flex-col relative overflow-hidden bg-[#070709]">
+        {/* Remotion Player — area atas, tinggi diatur oleh divider */}
+        <div
+          className={`relative flex-shrink-0 ${isDraggingSplit ? '' : 'transition-[height] duration-150 ease-out'}`}
+          style={{ height: `${Math.max(PLAYER_MIN_VH, Math.min(PLAYER_MAX_VH, splitPlayerVh))}vh` }}
+        >
+          <RemotionPreview
+            timeline={timeline}
+            currentFrame={currentFrame}
+            onFrameUpdate={handleFrameUpdate}
+            isPlaying={isPlaying}
+            onPlayPauseToggle={handlePlayPauseToggle}
+            selectedClipId={selectedClipId}
+            onSelectClip={handleSelectClip}
+            onUpdateClipPosition={handleUpdateClipPosition}
+            onPromptElementAction={(text, action) => {
+              setPrefilledPrompt(`Tolong ubah elemen "${text}": ${action}`);
+            }}
+            isTimelineOpen={isTimelineVisible}
+            onToggleTimeline={handleToggleTimeline}
+            onChangeAspectRatio={handleChangeAspectRatio}
+          />
+        </div>
+
+        {/* Draggable Divider — geser ke bawah perbesar Player, ke atas perbesar Chat */}
+        <div
+          onPointerDown={handleSplitPointerDown}
+          onPointerMove={handleSplitPointerMove}
+          onPointerUp={handleSplitPointerUp}
+          onPointerCancel={handleSplitPointerUp}
+          className="h-6 cursor-ns-resize touch-none select-none bg-zinc-800/50 hover:bg-zinc-700/90 relative z-30 flex items-center justify-center"
+          title="Geser pembagi ke atas/bawah untuk atur tinggi Player dan Chat"
+        >
+          {/* Handle visual — lebih jelas dan nyaman disentuh jari */}
+          <div className={`w-6 h-1 rounded-full shadow-sm transition-colors duration-200 ${isDraggingSplit ? 'bg-red-600' : 'bg-zinc-500/30 hover:bg-zinc-500/50'}`} />
+          <div className="absolute inset-0 h-[44px] w-full opacity-0" />
+        </div>
+
+        {/* AI Chat — area bawah, padding bawah agar input tidak menutupi Bottom Nav */}
+        <div
+          className={`flex-1 min-h-0 flex flex-col overflow-hidden relative pb-16 ${isDraggingSplit ? '' : 'transition-[height] duration-150 ease-out'}`}
+        >
+          <div className="flex-1 min-h-0 overflow-hidden">
+            <ChatPanel
+              messages={messages}
+              isAgentWorking={
+                agentStatus === 'thinking' ||
+                agentStatus === 'executing_tool' ||
+                agentStatus === 'streaming' ||
+                activeToolCalls.some((t) => t.status === 'running')
+              }
+              onSendMessage={handleSendMessage}
+              onStopAgent={handleStopAgent}
+              currentSec={currentSec}
+              selectedClipName={selectedClip?.name}
+              selectedClip={selectedClip}
+              selectedLayer={selectedLayer}
+              onClearSelectedClip={() => handleSelectClip('', '')}
+              prefilledPrompt={prefilledPrompt}
+              onOpenSettings={() => {
+                setIsSettingsOpen(true);
+              }}
+              byokModelId={agentSettings.modelId}
+              isByokConfigured={Boolean(agentSettings.apiBaseUrl && agentSettings.modelId)}
+              streamingMessageId={streamingMessageId}
+              activeToolCalls={activeToolCalls}
+            />
+          </div>
+        </div>
+      </div>
 
         {/* Timeline overlay (float on top of player, bottom area, draggable top edge) */}
         {isTimelineVisible && (
@@ -359,7 +456,6 @@ export default function App() {
             </div>
           </div>
         )}
-      </div>
 
       {/* Pemberitahuan operasi — muncul di atas semua layar */}
       <Toast open={!!toast} message={toast?.message ?? ''} onClose={hideToast} />
@@ -404,43 +500,6 @@ export default function App() {
             setIsElementSheetOpen(true);
           }}
         />
-      </BottomSheet>
-
-      {/* Chat / Obrolan Sheet — overlay di atas player, bisa di-drag untuk mengubah tinggi */}
-      <BottomSheet
-        isOpen={isChatSheetOpen}
-        onClose={() => setIsChatSheetOpen(false)}
-        title="Obrolan AI"
-        subtitle="Ketik perintah untuk mengedit dan merender video Remotion"
-        noPadding
-      >
-        <div className="flex-1 flex flex-col min-h-0 w-full overflow-hidden">
-          <ChatPanel
-            messages={messages}
-            isAgentWorking={
-              agentStatus === 'thinking' ||
-              agentStatus === 'executing_tool' ||
-              agentStatus === 'streaming'
-            }
-            onSendMessage={handleSendMessage}
-            onStopAgent={handleStopAgent}
-            currentSec={currentSec}
-            selectedClipName={selectedClip?.name}
-            selectedClip={selectedClip}
-            selectedLayer={selectedLayer}
-            onClearSelectedClip={() => handleSelectClip('', '')}
-            prefilledPrompt={prefilledPrompt}
-            onClose={() => setIsChatSheetOpen(false)}
-            onOpenSettings={() => {
-              setIsChatSheetOpen(false);
-              setIsSettingsOpen(true);
-            }}
-            byokModelId={agentSettings.modelId}
-            isByokConfigured={Boolean(agentSettings.apiBaseUrl && agentSettings.modelId)}
-            streamingMessageId={streamingMessageId}
-            activeToolCalls={activeToolCalls}
-          />
-        </div>
       </BottomSheet>
 
       {/* Code Editor Sheet — overlay di atas player */}

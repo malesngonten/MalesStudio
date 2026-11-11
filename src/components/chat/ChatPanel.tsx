@@ -216,50 +216,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
   return (
     <div className="w-full h-full flex-1 flex flex-col bg-[#09090c] select-text relative overflow-hidden min-h-0">
-      {/* Fixed Top Header for Chat Panel */}
-      <div className="h-12 px-4 flex items-center justify-between shrink-0 bg-gradient-to-b from-[#111116] to-[#09090c] shadow-xs z-20">
-        <div className="flex items-center gap-2.5 min-w-0">
-          <div className="w-7 h-7 rounded-full bg-red-600/20 flex items-center justify-center shrink-0">
-            <Sparkles className="w-4 h-4 text-red-400" />
-          </div>
-          <span className="font-semibold text-sm sm:text-base text-white truncate">AI Director</span>
-          <span className="text-xs font-mono text-zinc-400 bg-zinc-800/80 px-2 py-0.5 rounded-full">
-            ACP
-          </span>
-        </div>
-
-        <div className="flex items-center gap-2 shrink-0">
-          {onOpenSettings && (
-            <button
-              type="button"
-              onClick={onOpenSettings}
-              className={`tap flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all shadow-xs ${
-                isByokConfigured
-                  ? 'bg-emerald-950/60 text-emerald-300'
-                  : 'bg-amber-950/60 text-amber-300 animate-pulse'
-              }`}
-              title="Pengaturan Koneksi AI Provider (BYOK)"
-            >
-              <Key className="w-3.5 h-3.5" />
-              <span className="max-w-[130px] truncate">
-                {isByokConfigured ? byokModelId || 'AI Aktif' : 'Atur AI (BYOK)'}
-              </span>
-            </button>
-          )}
-
-          {onClose && (
-            <button
-              type="button"
-              onClick={onClose}
-              className="tap w-8 h-8 rounded-full flex items-center justify-center bg-zinc-800/60 hover:bg-zinc-700 text-zinc-400 hover:text-white transition-colors"
-              title="Sembunyikan Panel Chat"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          )}
-        </div>
-      </div>
-
       {/* Helper Banner when AI Provider is not yet configured */}
       {!isByokConfigured && onOpenSettings && (
         <div className="px-4 py-2.5 bg-gradient-to-r from-amber-950/70 via-zinc-900 to-zinc-900 flex items-center justify-between gap-3 shrink-0 text-xs sm:text-sm text-amber-200 shadow-sm">

@@ -1,19 +1,6 @@
 import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import { Player, PlayerRef } from '@remotion/player';
-import {
-  Play,
-  Pause,
-  Maximize2,
-  RotateCcw,
-  Layers,
-  ZoomIn,
-  ZoomOut,
-  RefreshCw,
-  Check,
-  Sparkles,
-  Type,
-  Mic,
-} from 'lucide-react';
+import { Play, Pause, Maximize2, RotateCcw, Layers, RefreshCw, Check } from 'lucide-react';
 import { TimelineData, TimelineClip } from '../../types';
 import { ShortVideoComposition } from '../../remotion/ShortVideoComposition';
 import { AspectRatioType, ASPECT_RATIOS } from '../../state/useStudioState';
@@ -60,6 +47,18 @@ export const RemotionPreview: React.FC<RemotionPreviewProps> = ({
   const [isGesturing, setIsGesturing] = useState<boolean>(false);
   const [isAspectMenuOpen, setIsAspectMenuOpen] = useState<boolean>(false);
 
+  // Dragging state on canvas for elements
+  const [draggingClip, setDraggingClip] = useState<{
+    layerId: string;
+    clipId: string;
+    startX: number;
+    startY: number;
+    initialX: number;
+    initialY: number;
+    currentX: number;
+    currentY: number;
+  } | null>(null);
+
   // Current aspect ratio computed from timeline width & height
   const currentRatio: AspectRatioType = (() => {
     if (timeline.width === 1920 && timeline.height === 1080) return '16:9';
@@ -94,18 +93,6 @@ export const RemotionPreview: React.FC<RemotionPreviewProps> = ({
     startY: 0,
     lastTapTime: 0,
   });
-
-  // Dragging state on canvas for elements
-  const [draggingClip, setDraggingClip] = useState<{
-    layerId: string;
-    clipId: string;
-    startX: number;
-    startY: number;
-    initialX: number;
-    initialY: number;
-    currentX: number;
-    currentY: number;
-  } | null>(null);
 
   // Viewport dimensions for strictly contained aspect ratio calculation
   const [viewportDim, setViewportDim] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
@@ -276,7 +263,7 @@ export const RemotionPreview: React.FC<RemotionPreviewProps> = ({
       gestureRef.current.lastTapTime = now;
 
       // When zoomed in, allow 1-finger panning of the preview
-      if (zoomScale > 1.05 && !draggingClip) {
+      if (zoomScale > 1.05) {
         gestureRef.current.is1FingerPan = true;
         gestureRef.current.is2Finger = false;
         gestureRef.current.startX = t.clientX;
@@ -354,10 +341,6 @@ export const RemotionPreview: React.FC<RemotionPreviewProps> = ({
     }
   };
 
-  // Format time display
-  const currentSec = (currentFrame / timeline.fps).toFixed(2);
-  const totalSec = (timeline.durationInFrames / timeline.fps).toFixed(2);
-
   // Active clips at current frame across all layer types
   const activeElementClips: { layerId: string; clip: TimelineClip }[] = [];
   const activeTextClips: { layerId: string; clip: TimelineClip }[] = [];
@@ -377,11 +360,17 @@ export const RemotionPreview: React.FC<RemotionPreviewProps> = ({
     });
   });
 
-  const allActiveClips = [
-    ...activeElementClips.map((c) => ({ ...c, type: 'element' as const, icon: Sparkles })),
-    ...activeTextClips.map((c) => ({ ...c, type: 'text' as const, icon: Type })),
-    ...activeNarrationClips.map((c) => ({ ...c, type: 'narration' as const, icon: Mic })),
-  ];
+  // Format time display
+  const currentSec = (currentFrame / timeline.fps).toFixed(2);
+  const totalSec = (timeline.durationInFrames / timeline.fps).toFixed(2);
+
+  // Scrubber bar seek
+  const handleScrubberChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const frame = parseInt(e.target.value, 10);
+    onFrameUpdate(frame);
+  };
+
+  const isZoomed = Math.abs(zoomScale - 1.0) > 0.05 || Math.abs(panOffset.x) > 2 || Math.abs(panOffset.y) > 2;
 
   // On-Canvas Drag Handlers for individual text clips
   const handlePointerDown = (
@@ -459,14 +448,6 @@ export const RemotionPreview: React.FC<RemotionPreviewProps> = ({
     }
   };
 
-  // Scrubber bar seek
-  const handleScrubberChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const frame = parseInt(e.target.value, 10);
-    onFrameUpdate(frame);
-  };
-
-  const isZoomed = Math.abs(zoomScale - 1.0) > 0.05 || Math.abs(panOffset.x) > 2 || Math.abs(panOffset.y) > 2;
-
   return (
     <div
       ref={containerRef}
@@ -483,45 +464,6 @@ export const RemotionPreview: React.FC<RemotionPreviewProps> = ({
         onWheel={handleWheel}
         className="flex-1 relative flex items-center justify-center p-2 sm:p-4 min-h-0 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-zinc-900/30 via-[#08080a] to-[#040406] overflow-hidden touch-none"
       >
-        {/* Floating Active Elements Quick Selector Bar */}
-        {allActiveClips.length > 0 && (
-          <div className="absolute top-2.5 left-2.5 z-40 flex items-center gap-1.5 p-1 rounded-full bg-black/80 backdrop-blur-md shadow-2xl max-w-[calc(100%-140px)] overflow-x-auto no-scrollbar pointer-events-auto animate-in fade-in duration-200">
-            <span className="text-[10px] uppercase font-bold text-zinc-400 pl-2 pr-1 shrink-0 font-mono">
-              Elemen
-            </span>
-            {allActiveClips.map(({ layerId, clip, type }) => {
-              const isSel = selectedClipId === clip.id;
-              return (
-                <button
-                  key={clip.id}
-                  type="button"
-                  onClick={() => {
-                    onSelectClip(layerId, clip.id);
-                    onPromptElementAction?.(
-                      clip.name,
-                      type === 'element'
-                        ? 'Ganti warna aksen, ubah teks milestone, atau sesuaikan animasi'
-                        : 'Ubah teks headline atau besarkan font'
-                    );
-                  }}
-                  className={`tap px-2.5 py-1 rounded-full text-xs font-semibold flex items-center gap-1.5 shrink-0 transition-all ${
-                    isSel
-                      ? 'bg-gradient-to-r from-red-600 to-rose-600 text-white shadow-md shadow-red-950/60 scale-102'
-                      : 'bg-white/10 hover:bg-white/20 text-zinc-300 hover:text-white'
-                  }`}
-                  title={`Pilih elemen "${clip.name}"`}
-                >
-                  {type === 'element' && <Sparkles className="w-3 h-3 text-amber-300" />}
-                  {type === 'text' && <Type className="w-3 h-3 text-purple-300" />}
-                  {type === 'narration' && <Mic className="w-3 h-3 text-emerald-300" />}
-                  <span className="truncate max-w-[120px]">{clip.name}</span>
-                  {isSel && <Check className="w-3 h-3" />}
-                </button>
-              );
-            })}
-          </div>
-        )}
-
         {/* Floating Zoom & Pan Status Pill (Minimalist, only shown when zoomed or panned) */}
         {isZoomed && (
           <div className="absolute top-2.5 right-2.5 z-40 flex items-center gap-1.5 px-3 py-1 rounded-full bg-black/80 backdrop-blur-md text-white text-xs font-mono shadow-xl animate-in fade-in duration-150">
@@ -577,7 +519,7 @@ export const RemotionPreview: React.FC<RemotionPreviewProps> = ({
               style={{
                 width: '100%',
                 height: '100%',
-                pointerEvents: 'none',
+                pointerEvents: 'auto',
               }}
               controls={false}
               autoPlay={false}
@@ -605,40 +547,7 @@ export const RemotionPreview: React.FC<RemotionPreviewProps> = ({
                         : 'hover:bg-white/[0.04]'
                     }`}
                     title={`Klik untuk memilih elemen "${clip.name}"`}
-                  >
-                    {/* Floating top pill badge on canvas */}
-                    <div className="flex items-center justify-between w-full pointer-events-none">
-                      <div
-                        className={`pointer-events-auto flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold backdrop-blur-md shadow-xl transition-all ${
-                          isSelected
-                            ? 'bg-red-600 text-white shadow-red-900/50 scale-102'
-                            : 'bg-black/75 hover:bg-black/90 text-zinc-300 hover:text-white'
-                        }`}
-                      >
-                        <Sparkles className="w-3.5 h-3.5 text-amber-300 shrink-0" />
-                        <span className="truncate max-w-[140px]">{clip.name}</span>
-                        <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-white/20 text-white font-mono">
-                          {isSelected ? 'Terpilih' : 'Klik'}
-                        </span>
-                      </div>
-
-                      {isSelected && (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onPromptElementAction?.(
-                              clip.name,
-                              'Ganti warna aksen ke emas dan percepat animasi'
-                            );
-                          }}
-                          className="pointer-events-auto tap flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/20 hover:bg-white/30 text-white text-[11px] font-medium backdrop-blur-md shadow-lg transition-all"
-                        >
-                          <span>💡 Edit di Chat</span>
-                        </button>
-                      )}
-                    </div>
-                  </div>
+                  />
                 );
               })}
 
@@ -693,7 +602,7 @@ export const RemotionPreview: React.FC<RemotionPreviewProps> = ({
       </div>
 
       {/* 2. Floating Minimalist Control Dock - Clean, Soft Gradients, No Harsh Borders */}
-      <div className="h-11 px-3 sm:px-4 bg-gradient-to-t from-[#09090c] via-[#09090c]/90 to-transparent flex items-center justify-between gap-2 shrink-0 z-20 relative">
+      <div className="h-14 px-3 sm:px-4 bg-gradient-to-t from-[#09090c] via-[#09090c]/90 to-transparent flex items-center justify-between gap-2 shrink-0 z-20 relative">
         {/* Progress bar layer — placed above controls as separate layer, not inline */}
         <div className="absolute -top-3 left-0 right-0 h-0.5 w-full overflow-hidden pointer-events-auto">
           <div className="h-full bg-gradient-to-r from-red-500 to-rose-500 rounded-full shadow-lg shadow-red-500/30" style={{ width: `${Math.min(100, (currentFrame / Math.max(1, timeline.durationInFrames - 1)) * 100)}%` }} />
@@ -708,31 +617,8 @@ export const RemotionPreview: React.FC<RemotionPreviewProps> = ({
           />
         </div>
 
-        {/* Left: Play/Pause & Timecode */}
+        {/* Left: Timecode + Aspect Ratio Switcher */}
         <div className="flex items-center gap-2 shrink-0">
-          <button
-            type="button"
-            onClick={onPlayPauseToggle}
-            className="tap w-7 h-7 rounded-full bg-gradient-to-r from-red-600 via-rose-600 to-red-500 hover:from-red-500 hover:to-rose-500 flex items-center justify-center text-white active:scale-95 transition-all shadow-md shadow-red-950/40 shrink-0"
-            aria-label={isPlaying ? 'Jeda video' : 'Putar video'}
-          >
-            {isPlaying ? (
-              <Pause className="w-3.5 h-3.5 fill-white" />
-            ) : (
-              <Play className="w-3.5 h-3.5 fill-white translate-x-0.5" />
-            )}
-          </button>
-
-          {/* Time indicator */}
-          <div className="flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-zinc-900/90 text-[11px] font-mono tabular-nums text-zinc-300 shadow-xs">
-            <span className="font-semibold text-white">{currentSec}s</span>
-            <span className="text-zinc-600">/</span>
-            <span className="text-zinc-400">{totalSec}s</span>
-          </div>
-        </div>
-
-        {/* Right: Quick actions (Track toggle, Zoom Reset, Rewind, Fullscreen) */}
-        <div className="flex items-center gap-1.5 shrink-0">
           {/* Aspect Ratio Switcher Dropdown */}
           {onChangeAspectRatio && (
             <div className="relative">
@@ -787,27 +673,16 @@ export const RemotionPreview: React.FC<RemotionPreviewProps> = ({
             </div>
           )}
 
-          {/* Zoom quick reset / status button */}
-          <button
-            type="button"
-            onClick={handleResetZoom}
-            title={isZoomed ? `Zoom: ${Math.round(zoomScale * 100)}% (Klik untuk Reset ke 100%)` : 'Pinch 2 jari pada video untuk Zoom'}
-            className={`tap px-2.5 py-1 rounded-full flex items-center gap-1 text-xs font-mono transition-all ${
-              isZoomed
-                ? 'bg-gradient-to-r from-red-950/90 to-zinc-900 text-rose-300 shadow-sm'
-                : 'bg-zinc-850/80 text-zinc-400 hover:text-white'
-            }`}
-          >
-            {zoomScale > 1.05 ? (
-              <ZoomIn className="w-3.5 h-3.5 text-rose-400" />
-            ) : zoomScale < 0.95 ? (
-              <ZoomOut className="w-3.5 h-3.5 text-rose-400" />
-            ) : (
-              <ZoomIn className="w-3.5 h-3.5 text-zinc-400" />
-            )}
-            <span className="font-semibold">{Math.round(zoomScale * 100)}%</span>
-          </button>
+          {/* Timecode */}
+          <div className="flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-zinc-900/90 text-[11px] font-mono tabular-nums text-zinc-300 shadow-xs">
+            <span className="font-semibold text-white">{currentSec}s</span>
+            <span className="text-zinc-600">/</span>
+            <span className="text-zinc-400">{totalSec}s</span>
+          </div>
+        </div>
 
+        {/* Right: Quick actions (Track toggle, Reset, Fullscreen) */}
+        <div className="flex items-center gap-1.5 shrink-0">
           {onToggleTimeline && (
             <button
               type="button"
@@ -840,6 +715,22 @@ export const RemotionPreview: React.FC<RemotionPreviewProps> = ({
             className="tap w-7 h-7 rounded-full bg-zinc-850/80 hover:bg-zinc-700/80 flex items-center justify-center text-zinc-300 hover:text-white transition-colors"
           >
             <Maximize2 className="w-3 h-3" />
+          </button>
+        </div>
+
+        {/* Center: Play/Pause button (absolute center) */}
+        <div className="absolute bottom-1/2 left-1/2 -translate-x-1/2 translate-y-1/2 z-10">
+          <button
+            type="button"
+            onClick={onPlayPauseToggle}
+            className="tap w-10 h-10 rounded-full bg-gradient-to-r from-red-600 via-rose-600 to-red-500 hover:from-red-500 hover:to-rose-500 flex items-center justify-center text-white active:scale-95 transition-all shadow-lg shadow-red-950/40"
+            aria-label={isPlaying ? 'Jeda video' : 'Putar video'}
+          >
+            {isPlaying ? (
+              <Pause className="w-4.5 h-4.5 fill-white" />
+            ) : (
+              <Play className="w-4.5 h-4.5 fill-white" />
+            )}
           </button>
         </div>
       </div>

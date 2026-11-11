@@ -1,0 +1,140 @@
+{
+  "id": "session-main",
+  "title": "Edit Video Remotion Pertama",
+  "createdAt": "Hari ini",
+  "updatedAt": "Baru saja",
+  "messages": [
+    {
+      "id": "msg-welcome",
+      "role": "assistant",
+      "text": "Halo! Saya AI Coding Agent di Males Ngonten Studio. Siap membantu membuat dan mengubah layer teks, durasi, animasi, dan musik di video Remotion Anda.",
+      "timestamp": "21.33",
+      "toolCalls": [
+        {
+          "id": "tc-init",
+          "toolName": "discoverWorkspace",
+          "target": "projects/proyek-remotion-1",
+          "status": "completed",
+          "durationMs": 85,
+          "result": "Workspace loaded: 4 layers, 150 frames @ 30fps"
+        }
+      ]
+    },
+    {
+      "id": "msg-usr-1794321394213-rsml35",
+      "role": "user",
+      "content": "Test",
+      "text": "Test",
+      "timestamp": "21.36",
+      "context": {
+        "playheadFrame": 32,
+        "playheadSec": 1.07,
+        "selectedClipId": "clip-el-achievement-1",
+        "selectedClip": {
+          "id": "clip-el-achievement-1",
+          "name": "Achievement Pop",
+          "from": 0,
+          "duration": 150,
+          "elementSlug": "achievement-pop",
+          "elementProps": {
+            "achievements": [
+              {
+                "label": "Milestone",
+                "title": "10K Subscribers",
+                "points": 1000,
+                "icon": "trophy"
+              },
+              {
+                "label": "Viral Hit",
+                "title": "100K Views in 24h",
+                "points": 2500,
+                "icon": "bolt"
+              },
+              {
+                "label": "Creator Pro",
+                "title": "Top Trending Video",
+                "points": 5000,
+                "icon": "star"
+              }
+            ],
+            "accent": "#e5484d",
+            "theme": "dark",
+            "speed": 1
+          },
+          "props": {
+            "text": "Achievement Pop",
+            "accent": "#e5484d"
+          }
+        }
+      },
+      "attachments": []
+    },
+    {
+      "id": "msg-ai-1794321393915-32pqik",
+      "role": "assistant",
+      "content": "Halo! Ada yang bisa saya bantu untuk video Remotion Anda hari ini?",
+      "text": "Halo! Ada yang bisa saya bantu untuk video Remotion Anda hari ini?",
+      "timestamp": "21.36",
+      "toolCalls": [],
+      "status": "completed"
+    },
+    {
+      "id": "msg-usr-1794338067763-2j9nqb",
+      "role": "user",
+      "content": "⚡ Percepat durasi animasi 1.5x",
+      "text": "⚡ Percepat durasi animasi 1.5x",
+      "timestamp": "02.14",
+      "context": {
+        "playheadFrame": 0,
+        "playheadSec": 0,
+        "selectedClipId": "clip-el-achievement-1",
+        "selectedClip": {
+          "id": "clip-el-achievement-1",
+          "name": "Achievement Pop",
+          "from": 0,
+          "duration": 150,
+          "elementSlug": "achievement-pop",
+          "elementProps": {
+            "achievements": [
+              {
+                "label": "Milestone",
+                "title": "10K Subscribers",
+                "points": 1000,
+                "icon": "trophy"
+              },
+              {
+                "label": "Viral Hit",
+                "title": "100K Views in 24h",
+                "points": 2500,
+                "icon": "bolt"
+              },
+              {
+                "label": "Creator Pro",
+                "title": "Top Trending Video",
+                "points": 5000,
+                "icon": "star"
+              }
+            ],
+            "accent": "#e5484d",
+            "theme": "dark",
+            "speed": 1
+          },
+          "props": {
+            "text": "Achievement Pop",
+            "accent": "#e5484d"
+          }
+        }
+      },
+      "attachments": []
+    },
+    {
+      "id": "msg-ai-1794338067531-b1ms9u",
+      "role": "assistant",
+      "content": "❌ **Gagal Memproses Permintaan via AI**\n\nThis operation was aborted",
+      "text": "❌ **Gagal Memproses Permintaan via AI**\n\nThis operation was aborted",
+      "timestamp": "02.14",
+      "toolCalls": [],
+      "status": "error"
+    }
+  ]
+}
