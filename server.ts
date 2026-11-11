@@ -2140,8 +2140,24 @@ User request:
       // Mark as completed - streaming is done, provider finished successfully
       if (!multiTurnHandled) {
         aiMessage.status = 'completed';
-        aiMessage.content = aiRawResponse;
-        aiMessage.text = aiRawResponse;
+        // Jika respons AI adalah JSON dengan field summary, tampilkan hanya
+        // nilai summary di chat. JSON toolCalls adalah kontrak internal backend.
+        let displayText = aiRawResponse;
+        try {
+          const cleaned = aiRawResponse
+            .replace(/^```json/im, '')
+            .replace(/^```/im, '')
+            .replace(/```$/m, '')
+            .trim();
+          const parsed = JSON.parse(cleaned);
+          if (parsed && typeof parsed.summary === 'string' && parsed.summary.trim()) {
+            displayText = parsed.summary.trim();
+          }
+        } catch {
+          // Bukan JSON — tampilkan respons apa adanya (chat mode)
+        }
+        aiMessage.content = displayText;
+        aiMessage.text = displayText;
       }
 
       // Attach token usage to message for frontend display
