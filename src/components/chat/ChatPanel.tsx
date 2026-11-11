@@ -246,32 +246,27 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         onChange={handleFileChange}
       />
 
-      {/* Active Tool Calls Panel — AI agent file/terminal operations */}
-      {activeToolCalls.length > 0 && (
-        <div className="mb-3 p-2 rounded-2xl bg-gradient-to-b from-[#181822] to-[#101015] shadow-xl max-h-[12vh] overflow-y-auto z-10">
-          {/* Collapse toggle */}
-          <button
-            type="button"
-            onClick={() => setIsToolPanelCollapsed(!isToolPanelCollapsed)}
-            className="flex items-center justify-between w-full mb-1"
-          >
-            <div className="flex items-center gap-1.5">
-              <Terminal className="w-3 h-3 text-zinc-400" />
+      {/* Active Tool Calls Panel — dipindah ke dalam timeline chat agar tidak menutupi */}
+
+      {/* Scrollable Chat Timeline */}
+      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-3.5 sm:px-5 py-4 space-y-4 text-sm">
+        {/* Active Tool Calls Panel — inline di dalam timeline, ikut scroll bersama pesan */}
+        {activeToolCalls.length > 0 && (
+          <div className="p-2.5 rounded-2xl bg-gradient-to-b from-[#181822] to-[#101015] shadow-sm border border-white/5">
+            <div className="flex items-center gap-2 mb-2">
+              <Terminal className="w-3.5 h-3.5 text-zinc-400" />
               <span className="text-[10px] font-semibold text-zinc-300 uppercase tracking-wider">
                 AI Agent Tool Calls
               </span>
+              <span className="ml-auto text-[9px] text-zinc-500 font-mono">
+                {activeToolCalls.filter((t) => t.status === 'running').length} running
+              </span>
             </div>
-            <span className={`text-[9px] text-zinc-500 font-mono ${isToolPanelCollapsed ? 'rotate-180' : ''}`}>
-              ▼
-            </span>
-          </button>
-
-          {!isToolPanelCollapsed && (
-            <div className="space-y-1 mt-1">
+            <div className="space-y-1.5">
               {activeToolCalls.map((tool) => (
                 <div
                   key={tool.id}
-                  className={`p-1.5 rounded-xl shadow-xs ${
+                  className={`p-2 rounded-xl ${
                     tool.status === 'running'
                       ? 'bg-zinc-800/60 animate-pulse'
                       : tool.status === 'completed'
@@ -280,31 +275,37 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                   }`}
                 >
                   <div className="flex items-center justify-between mb-0.5">
-                    <span className="text-[9px] font-mono text-zinc-300">{tool.toolName}</span>
-                    <span className={`text-[8px] font-bold rounded-full px-1 py-0 ${
-                      tool.status === 'running'
-                        ? 'bg-amber-500/20 text-amber-300 animate-pulse'
-                        : tool.status === 'completed'
-                        ? 'bg-emerald-500/20 text-emerald-300'
-                        : 'bg-rose-500/20 text-rose-300'
-                    }`}>
-                      {tool.status === 'running' ? 'Run' : tool.status === 'completed' ? 'Done' : 'Fail'}
+                    <span className="text-[10px] font-mono text-zinc-300">{tool.toolName}</span>
+                    <span
+                      className={`text-[8px] font-bold rounded-full px-1.5 py-0.5 ${
+                        tool.status === 'running'
+                          ? 'bg-amber-500/20 text-amber-300 animate-pulse'
+                          : tool.status === 'completed'
+                          ? 'bg-emerald-500/20 text-emerald-300'
+                          : 'bg-rose-500/20 text-rose-300'
+                      }`}
+                    >
+                      {tool.status === 'running' ? 'Running' : tool.status === 'completed' ? 'Done' : 'Failed'}
                     </span>
                   </div>
                   {(tool.description || tool.arguments) && (
-                    <div className="text-[9px] text-zinc-300 break-all">
-                      {tool.description || (tool.arguments ? JSON.stringify(tool.arguments).slice(0, 60) : '')}
+                    <div className="text-[10px] text-zinc-300 break-all">
+                      {tool.description || (tool.arguments ? JSON.stringify(tool.arguments).slice(0, 80) : '')}
+                    </div>
+                  )}
+                  {tool.result && (
+                    <div className="mt-1 text-[9px] text-zinc-400 break-all bg-black/40 p-1.5 rounded">
+                      {typeof tool.result === 'object' && tool.result !== null
+                        ? (JSON.stringify(tool.result, null, 2) || '').slice(0, 150)
+                        : String(tool.result).slice(0, 150)}
                     </div>
                   )}
                 </div>
               ))}
             </div>
-          )}
-        </div>
-      )}
+          </div>
+        )}
 
-      {/* Scrollable Chat Timeline */}
-      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-3.5 sm:px-5 py-4 space-y-4 text-sm">
         {messages.length === 0 && (
           <div className="py-10 text-center space-y-4 max-w-md mx-auto flex flex-col items-center">
             <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-zinc-850 text-zinc-300 text-xs font-medium shadow-md">
