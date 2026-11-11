@@ -123,10 +123,12 @@ export default function App() {
   const splitDragStartRef = useRef<{ startY: number; startPx: number } | null>(null);
 
   const DIVIDER_H = 24;
-  const CHAT_MIN_H = 260; // chip saran + input + pb-16
+
+  const chatWrapRef = useRef<HTMLDivElement>(null);
+  const chatMinRef = useRef<number>(260); // fallback awal
 
   const getContainerH = () => mainRef.current?.clientHeight ?? window.innerHeight;
-  const getMaxPlayerPx = () => Math.max(0, getContainerH() - DIVIDER_H - CHAT_MIN_H);
+  const getMaxPlayerPx = () => Math.max(0, getContainerH() - DIVIDER_H - chatMinRef.current);
 
   const handleSplitPointerDown = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
@@ -167,19 +169,37 @@ export default function App() {
     []
   );
 
-  // Clamp playerPx on window resize so chat never gets clipped
+  // Ukur batas chat dari DOM (chip + input) dan sinkronkan ke CSS var --chat-min
   useEffect(() => {
-    const onResize = () => {
-      if (playerPx != null) {
-        const maxPx = getMaxPlayerPx();
-        if (playerPx > maxPx) {
-          setPlayerPx(maxPx);
-        }
-      }
+    const container = mainRef.current;
+    const wrap = chatWrapRef.current;
+    if (!container || !wrap) return;
+
+    const update = () => {
+      const block = wrap.querySelector<HTMLElement>('[data-chat-anchor]');
+      if (!block) return;
+      const padB = parseFloat(getComputedStyle(wrap).paddingBottom) || 0;
+      const chatMin = Math.ceil(block.offsetHeight + padB);
+      chatMinRef.current = chatMin;
+      container.style.setProperty('--chat-min', `${chatMin}px`);
+      const max = Math.max(0, container.clientHeight - DIVIDER_H - chatMin);
+      setPlayerPx((p) => (p != null && p > max ? max : p));
     };
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
-  }, [playerPx]);
+
+    const ro = new ResizeObserver(update);
+    const observeBlock = () => {
+      ro.disconnect();
+      ro.observe(container);
+      const block = wrap.querySelector('[data-chat-anchor]');
+      if (block) ro.observe(block);
+      update();
+    };
+    const mo = new MutationObserver(observeBlock); // jaga-jaga kalau blok di-mount ulang
+    mo.observe(wrap, { childList: true, subtree: true });
+    observeBlock();
+
+    return () => { ro.disconnect(); mo.disconnect(); };
+  }, []);
 
   // Overlay sheets — Remotion Player stays visible behind these
   const [isChatSheetOpen, setIsChatSheetOpen] = useState<boolean>(false);
@@ -340,7 +360,7 @@ export default function App() {
         {/* Remotion Player — area atas, tinggi diatur oleh divider */}
         <div
           className={`relative flex-shrink-0 overflow-hidden ${isDraggingSplit ? '' : 'transition-[height] duration-150 ease-out'}`}
-          style={{ height: playerPx ?? '55%', maxHeight: `calc(100% - ${DIVIDER_H + CHAT_MIN_H}px)` }}
+          style={{ height: playerPx ?? '55%', maxHeight: `calc(100% - ${DIVIDER_H}px - var(--chat-min, 260px))` }}
         >
           <RemotionPreview
             timeline={timeline}
@@ -376,8 +396,9 @@ export default function App() {
 
         {/* AI Chat — area bawah, padding bawah agar input tidak menutupi Bottom Nav */}
         <div
+          ref={chatWrapRef}
           className={`flex-1 flex flex-col overflow-hidden relative pb-16`}
-          style={{ minHeight: CHAT_MIN_H }}
+          style={{ minHeight: 'var(--chat-min, 260px)' }}
         >
           <div className="flex-1 min-h-0 overflow-hidden">
             <ChatPanel

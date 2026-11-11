@@ -392,23 +392,24 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         </div>
       )}
 
-      {/* Modern Contextual Suggestion Chips */}
-      <div className="px-4 py-1.5 flex items-center gap-2 overflow-x-auto no-scrollbar shrink-0 bg-gradient-to-r from-[#0d0d12] via-[#09090c] to-[#0d0d12]">
-        {getContextualPrompts(selectedClip).map((prompt, idx) => (
-          <button
-            key={idx}
-            type="button"
-            onClick={() => onSendMessage(prompt, [])}
-            disabled={isAgentWorking}
-            className="tap whitespace-nowrap text-xs font-medium px-3.5 py-1.5 rounded-full bg-gradient-to-r from-zinc-850 to-zinc-800 hover:from-zinc-800 hover:to-zinc-750 text-zinc-200 hover:text-white transition-all shrink-0 disabled:opacity-40 active:scale-95 shadow-sm"
-          >
-            {prompt}
-          </button>
-        ))}
-      </div>
+      {/* Modern Contextual Suggestion Chips + Input — fixed bottom block, ukuran diukur dari DOM */}
+      <div data-chat-anchor className="shrink-0">
+        <div className="px-4 py-1.5 flex items-center gap-2 overflow-x-auto no-scrollbar shrink-0 bg-gradient-to-r from-[#0d0d12] via-[#09090c] to-[#0d0d12]">
+          {getContextualPrompts(selectedClip).map((prompt, idx) => (
+            <button
+              key={idx}
+              type="button"
+              onClick={() => onSendMessage(prompt, [])}
+              disabled={isAgentWorking}
+              className="tap whitespace-nowrap text-xs font-medium px-3.5 py-1.5 rounded-full bg-gradient-to-r from-zinc-850 to-zinc-800 hover:from-zinc-800 hover:to-zinc-750 text-zinc-200 hover:text-white transition-all shrink-0 disabled:opacity-40 active:scale-95 shadow-sm"
+            >
+              {prompt}
+            </button>
+          ))}
+        </div>
 
-      {/* Minimalist Floating Chat Input Box - Identical to Reference Image (Zero Border) */}
-      <div className="px-3.5 pt-1 pb-3.5 safe-pb bg-gradient-to-t from-[#09090c] to-transparent shrink-0 z-20">
+        {/* Minimalist Floating Chat Input Box - Identical to Reference Image (Zero Border) */}
+        <div className="px-3.5 pt-1 pb-3.5 safe-pb bg-gradient-to-t from-[#09090c] to-transparent shrink-0 z-20">
         {/* Attachment Previews */}
         {attachments.length > 0 && (
           <div className="flex items-center gap-2 mb-2 overflow-x-auto no-scrollbar py-0.5">
@@ -525,6 +526,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             </div>
           </div>
         </form>
+      </div>
       </div>
     </div>
   );
