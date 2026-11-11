@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   useStudioState,
   INITIAL_STUDIO_TIMELINE,
@@ -115,13 +115,20 @@ export default function App() {
   const [timelineHeight, setTimelineHeight] = useState<number>(190);
   const [isDraggingTimeline, setIsDraggingTimeline] = useState<boolean>(false);
 
-  // Vertical split layout: Player (top) <-> Divider <-> Chat (bottom)
-  const [splitPlayerVh, setSplitPlayerVh] = useState<number>(55);
-  const [isDraggingSplit, setIsDraggingSplit] = useState<boolean>(false);
-  const splitDragStartRef = useRef<{ startY: number; startVh: number } | null>(null);
+  const mainRef = useRef<HTMLDivElement>(null);
 
-  const PLAYER_MIN_VH = 0;
-  const PLAYER_MAX_VH = 70;
+  // Vertical split layout: Player (top) <-> Divider <-> Chat (bottom)
+  const [playerPx, setPlayerPx] = useState<number | null>(null);
+  const [isDraggingSplit, setIsDraggingSplit] = useState<boolean>(false);
+  const splitDragStartRef = useRef<{ startY: number; startPx: number } | null>(null);
+
+  const DIVIDER_H = 24;
+  const CHAT_MIN_H = 64 + 160; // pb-16 + minimal visible chat area
+
+  const getMaxPlayerPx = () => {
+    if (!mainRef.current) return 0;
+    return Math.max(0, mainRef.current.clientHeight - DIVIDER_H - CHAT_MIN_H);
+  };
 
   const handleSplitPointerDown = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
@@ -131,23 +138,21 @@ export default function App() {
       setIsDraggingSplit(true);
       splitDragStartRef.current = {
         startY: e.clientY,
-        startVh: splitPlayerVh,
+        startPx: playerPx ?? mainRef.current.clientHeight * 0.55,
       };
     },
-    [splitPlayerVh]
+    []
   );
 
   const handleSplitPointerMove = useCallback(
     (ev: React.PointerEvent<HTMLDivElement>) => {
       if (!splitDragStartRef.current) return;
       const deltaY = ev.clientY - splitDragStartRef.current.startY;
-      const viewportH = window.innerHeight || 800;
-      const deltaVh = (deltaY / viewportH) * 100;
-      let nextVh = splitDragStartRef.current.startVh + deltaVh;
-      nextVh = Math.max(PLAYER_MIN_VH, Math.min(nextVh, PLAYER_MAX_VH));
-      setSplitPlayerVh(nextVh);
+      const next = splitDragStartRef.current.startPx + deltaY;
+      const maxPx = getMaxPlayerPx();
+      setPlayerPx(Math.max(0, Math.min(next, maxPx)));
     },
-    [splitPlayerVh]
+    []
   );
 
   const handleSplitPointerUp = useCallback(
@@ -161,6 +166,20 @@ export default function App() {
     },
     []
   );
+
+  // Clamp playerPx on window resize so chat never gets clipped
+  useEffect(() => {
+    const onResize = () => {
+      if (playerPx != null) {
+        const maxPx = getMaxPlayerPx();
+        if (playerPx > maxPx) {
+          setPlayerPx(maxPx);
+        }
+      }
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [playerPx]);
 
   // Overlay sheets — Remotion Player stays visible behind these
   const [isChatSheetOpen, setIsChatSheetOpen] = useState<boolean>(false);
@@ -317,11 +336,11 @@ export default function App() {
       />
 
       {/* 2. SPLIT LAYOUT: Remotion Player (atas) | Divider (drag) | AI Chat (bawah) */}
-      <div className="flex-1 min-h-0 flex flex-col relative overflow-hidden bg-[#070709]">
+      <div ref={mainRef} className="flex-1 min-h-0 flex flex-col relative overflow-hidden bg-[#070709]">
         {/* Remotion Player — area atas, tinggi diatur oleh divider */}
         <div
-          className={`relative flex-shrink-0 ${isDraggingSplit ? '' : 'transition-[height] duration-150 ease-out'}`}
-          style={{ height: `${Math.max(PLAYER_MIN_VH, Math.min(PLAYER_MAX_VH, splitPlayerVh))}vh` }}
+          className={`relative flex-shrink-0 overflow-hidden ${isDraggingSplit ? '' : 'transition-[height] duration-150 ease-out'}`}
+          style={{ height: playerPx ?? '55%', maxHeight: `calc(100% - ${DIVIDER_H + CHAT_MIN_H}px)` }}
         >
           <RemotionPreview
             timeline={timeline}
