@@ -123,12 +123,10 @@ export default function App() {
   const splitDragStartRef = useRef<{ startY: number; startPx: number } | null>(null);
 
   const DIVIDER_H = 24;
-  const CHAT_MIN_H = 64 + 160; // pb-16 + minimal visible chat area
+  const CHAT_MIN_H = 260; // chip saran + input + pb-16
 
-  const getMaxPlayerPx = () => {
-    if (!mainRef.current) return 0;
-    return Math.max(0, mainRef.current.clientHeight - DIVIDER_H - CHAT_MIN_H);
-  };
+  const getContainerH = () => mainRef.current?.clientHeight ?? window.innerHeight;
+  const getMaxPlayerPx = () => Math.max(0, getContainerH() - DIVIDER_H - CHAT_MIN_H);
 
   const handleSplitPointerDown = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
@@ -136,9 +134,12 @@ export default function App() {
       e.stopPropagation();
       e.currentTarget.setPointerCapture(e.pointerId);
       setIsDraggingSplit(true);
+      const currentPx =
+        e.currentTarget.previousElementSibling?.getBoundingClientRect().height ??
+        getContainerH() * 0.55;
       splitDragStartRef.current = {
         startY: e.clientY,
-        startPx: playerPx ?? mainRef.current.clientHeight * 0.55,
+        startPx: currentPx,
       };
     },
     []
@@ -149,8 +150,7 @@ export default function App() {
       if (!splitDragStartRef.current) return;
       const deltaY = ev.clientY - splitDragStartRef.current.startY;
       const next = splitDragStartRef.current.startPx + deltaY;
-      const maxPx = getMaxPlayerPx();
-      setPlayerPx(Math.max(0, Math.min(next, maxPx)));
+      setPlayerPx(Math.max(0, Math.min(next, getMaxPlayerPx())));
     },
     []
   );
@@ -376,7 +376,8 @@ export default function App() {
 
         {/* AI Chat — area bawah, padding bawah agar input tidak menutupi Bottom Nav */}
         <div
-          className={`flex-1 min-h-0 flex flex-col overflow-hidden relative pb-16 ${isDraggingSplit ? '' : 'transition-[height] duration-150 ease-out'}`}
+          className={`flex-1 flex flex-col overflow-hidden relative pb-16`}
+          style={{ minHeight: CHAT_MIN_H }}
         >
           <div className="flex-1 min-h-0 overflow-hidden">
             <ChatPanel
