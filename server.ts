@@ -1558,6 +1558,7 @@ app.post('/api/agent/prompt', async (req, res) => {
       let aiRawResponse = '';
       let editingMode = false;
       let timelineChanges: any = null;
+      let multiTurnHandled = false; // tandai kalau multi-turn loop sudah menangani respons
 
       // Helper: broadcast an AI text chunk to SSE clients in real time
       const streamAiChunk = (chunk: string) => {
@@ -1925,8 +1926,8 @@ User request:
         }
       }
 
-      // MULTI-TURN LOOP: kalau ronde pertama hanya readFile (investigasi) tanpa write/modify/render,
-      // panggil AI lagi dengan hasil baca agar langsung menulis perubahan ke file.
+      // MULTI-TURN LOOP: kalau ronde pertama hanya read-only tools (listDirectory, readFile, dll.)
+      // tanpa write/modify/render, panggil AI lagi dengan hasil baca untuk diinterpretasikan.
       try {
         const firstRoundTools = (timelineChanges?.toolCalls || []).map((tc: any) => tc.tool);
         const hasWriteOrModify = firstRoundTools.some((t) => t === 'writeFile' || t === 'modifyTimeline' || t === 'renderVideo');
@@ -1936,37 +1937,37 @@ User request:
           agentStatus = 'thinking';
           broadcastSSE('agent_status', { status: 'thinking' });
 
-          // Kumpulkan hasil readFile dari ronde pertama
-          const readResults: Array<{ tool: string; path: string; result: any }> = [];
+          // Kumpulkan SEMUA hasil tool read-only dari ronde pertama (listDirectory, readFile, dll.)
+          const toolResults: Array<{ tool: string; path: string; result: any }> = [];
           for (const tc of timelineChanges.toolCalls || []) {
             const executed = aiMessage.toolCalls.find((t: any) => t.toolName === tc.tool && t.target === (tc.path || tc.command || tc.tool));
-            if (tc.tool === 'readFile' && executed?.result) {
-              readResults.push({
+            if (executed?.result !== undefined) {
+              toolResults.push({
                 tool: tc.tool,
-                path: tc.path,
+                path: tc.path || tc.command || tc.tool,
                 result: executed.result,
               });
             }
           }
 
-          // Bangun follow-up prompt dengan hasil baca
+          // Bangun follow-up prompt untuk AI agar menjawab dalam bahasa Indonesia (plain text, bukan JSON)
           const followUpMessages = [
-            { role: 'system', content: systemPrompt },
+            { role: 'system', content: systemPrompt + '\n\nIMPORTANT: User meminta penjelasan/deskripsi, BUKAN modifikasi file. Balas dalam bahasa Indonesia dengan plain text (bukan JSON). Jelaskan visual, style, dan animasi komponen berdasarkan hasil tool di atas.' },
             { role: 'user', content: text },
             {
               role: 'assistant',
               content: JSON.stringify({
-                summary: 'Saya baru saja membaca file proyek untuk memahami struktur saat ini.',
+                summary: 'Saya baru saja menjalankan tool investigasi untuk memahami struktur proyek.',
                 toolCalls: (timelineChanges?.toolCalls || []).map((tc: any) => ({
                   tool: tc.tool,
                   path: tc.path,
-                  result: 'sudah dibaca, lihat hasil di bawah',
+                  result: 'sudah dieksekusi, lihat hasil di bawah',
                 })),
               }),
             },
             {
               role: 'user',
-              content: `Berikut hasil pembacaan file proyek:\n${readResults.map((r) => `\n--- ${r.path} ---\n${typeof r.result === 'string' ? r.result.slice(0, 3000) : JSON.stringify(r.result, null, 2).slice(0, 3000)}`).join('\n')}\n\nBerdasarkan hasil di atas, TULIS perubahan yang diminta user langsung ke file terkait (timeline.json atau src/*.tsx) menggunakan writeFile atau modifyTimeline. Jangan cuma readFile lagi.`,
+              content: `Berikut hasil eksekusi tool investigasi:\n${toolResults.map((r) => `\n--- ${r.tool} (${r.path}) ---\n${typeof r.result === 'string' ? r.result.slice(0, 4000) : JSON.stringify(r.result, null, 2).slice(0, 4000)}`).join('\n')}\n\nBerdasarkan hasil di atas, jelaskan dalam bahasa Indonesia tentang komponen yang sedang diedit: visualnya, style, dan animasinya. Balas dengan plain text, bukan JSON.`,
             },
           ];
 
@@ -1977,83 +1978,128 @@ User request:
             console.error('[MULTI-TURN] callAI gagal:', callErr?.message || callErr);
           }
 
-          // Parse follow-up response untuk toolCalls
-          try {
+          // Jika AI balas plain text (bukan JSON), gunakan langsung sebagai pesan akhir
+          if (followUpText && followUpText.trim().length > 0) {
             const cleaned = followUpText
               .replace(/^```json/im, '')
               .replace(/^```/im, '')
               .replace(/```$/m, '')
               .trim();
-            const parsed = JSON.parse(cleaned);
-            if (parsed.toolCalls && Array.isArray(parsed.toolCalls)) {
-              for (const tc of parsed.toolCalls) {
-                const toolCall: any = {
-                  id: 'tc-followup-' + tc.tool + '-' + Date.now(),
-                  toolName: tc.tool,
-                  description: `Eksekusi lanjutan ${tc.tool}`,
-                  arguments: tc,
-                  target: tc.path || tc.layerId || tc.command || tc.tool,
-                  status: 'running',
-                  timestamp: new Date().toISOString(),
-                };
-                aiMessage.toolCalls.push(toolCall);
-                broadcastSSE('tool_update', { messageId: aiMsgId, toolCall });
+            // Coba parse JSON, kalau gagal berarti plain text — gunakan langsung
+            let isJson = false;
+            try {
+              JSON.parse(cleaned);
+              isJson = true;
+            } catch {
+              isJson = false;
+            }
 
-                try {
-                  const result = await executeTool(tc);
-                  toolCall.status = 'completed';
-                  toolCall.durationMs = 500;
-                  toolCall.result = result;
+            if (!isJson) {
+              aiMessage.content = cleaned;
+              aiMessage.text = cleaned;
+              aiMessage.status = 'completed';
+              broadcastSSE('message_complete', { messageId: aiMsgId, message: aiMessage });
+              const chatFile = path.join(CHATS_DIR, `${currentSession.id}.json`);
+              fs.writeFileSync(chatFile, JSON.stringify(currentSession, null, 2), 'utf-8');
+              agentStatus = 'idle';
+              broadcastSSE('agent_status', { status: 'idle' });
+              activeCancellationController = null;
+              return;
+            }
+
+            // Kalau masih JSON dengan toolCalls, eksekusi lanjutan
+            try {
+              const parsed = JSON.parse(cleaned);
+              if (parsed.toolCalls && Array.isArray(parsed.toolCalls)) {
+                for (const tc of parsed.toolCalls) {
+                  const toolCall: any = {
+                    id: 'tc-followup-' + tc.tool + '-' + Date.now(),
+                    toolName: tc.tool,
+                    description: `Eksekusi lanjutan ${tc.tool}`,
+                    arguments: tc,
+                    target: tc.path || tc.layerId || tc.command || tc.tool,
+                    status: 'running',
+                    timestamp: new Date().toISOString(),
+                  };
+                  aiMessage.toolCalls.push(toolCall);
                   broadcastSSE('tool_update', { messageId: aiMsgId, toolCall });
 
-                  // broadcast file_changed untuk writeFile timeline.json
-                  if (tc.tool === 'writeFile' && tc.path === 'timeline.json' && result.content) {
-                    try {
-                      const parsedTimeline = JSON.parse(result.content);
-                      broadcastSSE('file_changed', { file: 'timeline.json', timeline: parsedTimeline });
-                      const commitMsg = parsed.summary || `Perubahan oleh agent (follow-up): ${text.slice(0, 30)}`;
-                      const newHash = createGitCheckpoint(commitMsg, parsedTimeline);
+                  try {
+                    const result = await executeTool(tc);
+                    toolCall.status = 'completed';
+                    toolCall.durationMs = 500;
+                    toolCall.result = result;
+                    broadcastSSE('tool_update', { messageId: aiMsgId, toolCall });
+
+                    if (tc.tool === 'writeFile' && tc.path === 'timeline.json' && result.content) {
+                      try {
+                        const parsedTimeline = JSON.parse(result.content);
+                        broadcastSSE('file_changed', { file: 'timeline.json', timeline: parsedTimeline });
+                        const commitMsg = parsed.summary || `Perubahan oleh agent (follow-up): ${text.slice(0, 30)}`;
+                        const newHash = createGitCheckpoint(commitMsg, parsedTimeline);
+                        aiMessage.checkpointHash = newHash;
+                        aiMessage.canRevert = true;
+                      } catch {}
+                    }
+
+                    if (tc.tool === 'writeFile' && tc.path && tc.path.startsWith('src/') && tc.path.endsWith('.tsx')) {
+                      broadcastSSE('file_changed', { file: tc.path, updated: true });
+                    }
+
+                    if (tc.tool === 'modifyTimeline' && result.success) {
+                      broadcastSSE('file_changed', { file: 'timeline.json', timeline: result.timeline });
+                      const commitMsg = parsed.summary || `Perubahan oleh agent (modifyTimeline): ${text.slice(0, 30)}`;
+                      const newHash = createGitCheckpoint(commitMsg, result.timeline);
                       aiMessage.checkpointHash = newHash;
                       aiMessage.canRevert = true;
-                    } catch {}
-                  }
+                    }
 
-                  // broadcast file_changed untuk writeFile src/*.tsx (komponen berubah)
-                  if (tc.tool === 'writeFile' && tc.path && tc.path.startsWith('src/') && tc.path.endsWith('.tsx')) {
-                    broadcastSSE('file_changed', { file: tc.path, updated: true });
+                    if (tc.tool === 'renderVideo' && result.success) {
+                      broadcastSSE('render_completed', {
+                        job: {
+                          id: 'rnd-' + Date.now(),
+                          status: 'completed',
+                          progress: 100,
+                          downloadUrl: result.downloadUrl,
+                          fileName: path.basename(result.outputPath),
+                          fileSize: result.sizeBytes,
+                        }
+                      });
+                    }
+                  } catch (err: any) {
+                    toolCall.status = 'failed';
+                    toolCall.error = err?.message || String(err);
+                    broadcastSSE('tool_update', { messageId: aiMsgId, toolCall });
                   }
-
-                  // modifyTimeline support
-                  if (tc.tool === 'modifyTimeline' && result.success) {
-                    broadcastSSE('file_changed', { file: 'timeline.json', timeline: result.timeline });
-                    const commitMsg = parsed.summary || `Perubahan oleh agent (modifyTimeline): ${text.slice(0, 30)}`;
-                    const newHash = createGitCheckpoint(commitMsg, result.timeline);
-                    aiMessage.checkpointHash = newHash;
-                    aiMessage.canRevert = true;
-                  }
-
-                  // render video
-                  if (tc.tool === 'renderVideo' && result.success) {
-                    broadcastSSE('render_completed', {
-                      job: {
-                        id: 'rnd-' + Date.now(),
-                        status: 'completed',
-                        progress: 100,
-                        downloadUrl: result.downloadUrl,
-                        fileName: path.basename(result.outputPath),
-                        fileSize: result.sizeBytes,
-                      }
-                    });
-                  }
-                } catch (err: any) {
-                  toolCall.status = 'failed';
-                  toolCall.error = err?.message || String(err);
-                  broadcastSSE('tool_update', { messageId: aiMsgId, toolCall });
                 }
               }
+            } catch {
+              // Follow-up response bukan JSON yang valid, abaikan
             }
-          } catch {
-            // Follow-up response bukan JSON, abaikan
+          }
+
+          // FALLBACK: kalau AI provider nggak tersedia atau follow-up gagal,
+          // generate penjelasan sederhana dari hasil tool langsung di server
+          if (!followUpText || followUpText.trim().length === 0) {
+            const fallbackParts: string[] = [];
+            for (const r of toolResults) {
+              if (r.tool === 'listDirectory') {
+                const entries = (r.result?.entries || []).map((e: any) => `- ${e.name} (${e.isDirectory ? 'folder' : 'file'})`).join('\n');
+                fallbackParts.push(`Isi direktori ${r.path}:\n${entries}`);
+              } else if (r.tool === 'readFile') {
+                fallbackParts.push(`Isi file ${r.path} (${r.result?.size || 0} bytes):\n${typeof r.result.content === 'string' ? r.result.content.slice(0, 2000) : JSON.stringify(r.result).slice(0, 2000)}`);
+              }
+            }
+            const fallbackText = fallbackParts.length > 0
+              ? `Berikut hasil investigasi komponen yang sedang diedit:\n\n${fallbackParts.join('\n\n')}\n\nUntuk penjelasan lebih detail tentang visual, style, dan animasi, silakan konfigurasikan AI Provider (BYOK atau Gemini) di menu Pengaturan.`
+              : 'Hasil investigasi kosong. Silakan coba lagi atau konfigurasikan AI Provider di menu Pengaturan.';
+            aiMessage.content = fallbackText;
+            aiMessage.text = fallbackText;
+            aiMessage.status = 'completed';
+            multiTurnHandled = true;
+            broadcastSSE('message_complete', { messageId: aiMsgId, message: aiMessage });
+            const chatFile = path.join(CHATS_DIR, `${currentSession.id}.json`);
+            fs.writeFileSync(chatFile, JSON.stringify(currentSession, null, 2), 'utf-8');
           }
         }
       } catch (loopErr: any) {
@@ -2092,9 +2138,11 @@ User request:
       }
 
       // Mark as completed - streaming is done, provider finished successfully
-      aiMessage.status = 'completed';
-      aiMessage.content = aiRawResponse;
-      aiMessage.text = aiRawResponse;
+      if (!multiTurnHandled) {
+        aiMessage.status = 'completed';
+        aiMessage.content = aiRawResponse;
+        aiMessage.text = aiRawResponse;
+      }
 
       // Attach token usage to message for frontend display
       try {
