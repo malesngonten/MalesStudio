@@ -16,6 +16,15 @@ import {
 
 dotenv.config();
 
+// Process-level error handlers — mencegah server hard-reset/crash saat AI memproses prompt
+process.on('uncaughtException', (err: any) => {
+  console.error('[UNCAUGHT EXCEPTION]', err?.message || err);
+});
+
+process.on('unhandledRejection', (reason: any) => {
+  console.error('[UNHANDLED REJECTION]', reason?.message || reason);
+});
+
 const geminiApiKey = process.env.GEMINI_API_KEY;
 let geminiClient: GoogleGenAI | null = null;
 if (geminiApiKey) {
