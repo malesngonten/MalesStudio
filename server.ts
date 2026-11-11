@@ -1075,6 +1075,52 @@ async function executeTool(toolCall: any): Promise<any> {
       });
     }
 
+    case 'modifyTimeline': {
+      return new Promise((resolve) => {
+        try {
+          const { layerId, clipId, updates } = toolCall;
+          if (!layerId || !clipId || !updates) {
+            return resolve({ error: 'modifyTimeline butuh layerId, clipId, dan updates' });
+          }
+
+          const timelineData = JSON.parse(fs.readFileSync(timelinePath, 'utf-8'));
+          const layer = timelineData.layers?.find((l) => l.id === layerId);
+          if (!layer) return resolve({ error: `Layer ${layerId} tidak ditemukan` });
+          const clip = layer.clips?.find((c) => c.id === clipId);
+          if (!clip) return resolve({ error: `Clip ${clipId} tidak ditemukan di layer ${layerId}` });
+
+          if (updates.elementProps) {
+            clip.elementProps = { ...clip.elementProps, ...updates.elementProps };
+          }
+          if (updates.props) {
+            clip.props = { ...clip.props, ...updates.props };
+          }
+          Object.entries(updates).forEach(([k, v]) => {
+            if (k !== 'elementProps' && k !== 'props') {
+              clip[k] = v;
+            }
+          });
+
+          fs.writeFileSync(timelinePath, JSON.stringify(timelineData, null, 2), 'utf-8');
+          broadcastSSE('file_changed', { file: 'timeline.json', timeline: timelineData });
+
+          const hash = createGitCheckpoint(`AI modify clip ${clipId} (layer ${layerId})`, timelineData);
+
+          resolve({
+            success: true,
+            path: 'timeline.json',
+            layerId,
+            clipId,
+            updates,
+            checkpointHash: hash,
+            timeline: timelineData,
+          });
+        } catch (err: any) {
+          resolve({ error: err?.message || String(err) });
+        }
+      });
+    }
+
     default:
       return { error: `Unknown tool: ${tool}` };
   }
@@ -1315,6 +1361,74 @@ app.post('/api/agent/execute', async (req, res) => {
   }
 });
 
+// Helper: panggil AI provider (BYOK prioritas, lalu Gemini fallback)
+// Mengembalikan teks penuh respons AI (non-streaming, cocok untuk multi-turn follow-up)
+async function callAI(
+  messages: Array<{ role: string; content: string }>,
+  byok: { baseUrl?: string; apiKey?: string; modelId?: string } | null
+): Promise<string> {
+  const activeByok = byok;
+  const hasByok = Boolean(activeByok?.baseUrl && activeByok?.modelId);
+
+  if (hasByok) {
+    try {
+      const cleanBase = activeByok.baseUrl.trim().replace(/\/+$/, '');
+      const targetUrl = cleanBase.endsWith('/chat/completions')
+        ? cleanBase
+        : `${cleanBase}/chat/completions`;
+
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (activeByok.apiKey && typeof activeByok.apiKey === 'string' && activeByok.apiKey.trim()) {
+        headers['Authorization'] = `Bearer ${activeByok.apiKey.trim()}`;
+      }
+
+      const apiRes = await fetch(targetUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          model: activeByok.modelId.trim(),
+          messages,
+          temperature: 0.2,
+          stream: false,
+        }),
+        signal: activeCancellationController?.signal,
+      });
+
+      if (!apiRes.ok) {
+        throw new Error(`HTTP ${apiRes.status}`);
+      }
+
+      const data = await apiRes.json();
+      return data.choices?.[0]?.message?.content || '';
+    } catch (err: any) {
+      // Fall through to Gemini if BYOK fails
+    }
+  }
+
+  if (geminiClient) {
+    try {
+      const contents = messages.map((m) => ({
+        role: m.role,
+        parts: [{ text: m.content }],
+      }));
+      const aiResponse = await geminiClient.models.generateContentStream({
+        model: 'gemini-3.8-flash',
+        contents,
+        config: { temperature: 0.2 },
+      });
+      let text = '';
+      for await (const chunk of aiResponse) {
+        if (chunk.text) text += chunk.text;
+      }
+      return text;
+    } catch {}
+  }
+
+  return '';
+}
+
 // 6. POST /api/agent/prompt
 app.post('/api/agent/prompt', async (req, res) => {
   const { text, context, attachments, sessionId, byok, clientMessageId } = req.body;
@@ -1445,6 +1559,15 @@ app.post('/api/agent/prompt', async (req, res) => {
       const systemPrompt = `You are the AI video production agent for Males Ngonten Studio, a short video editor for TikTok/Reels/Shorts.
 You operate on a local file system and have terminal access. You can read, write, delete files, run shell commands, and render videos.
 
+FREEDOM:
+- You have FULL freedom to READ and EDIT every file in the project, including:
+  - timeline.json (source of truth for layers, clips, durations, elementProps)
+  - src/Composition.tsx (main Remotion composition)
+  - src/*.element.tsx (any element component installed from library)
+  - assets.json, GEMINI.md, scripts/*
+- If the user request is a clear modification (change color, text, duration, animation, position, speed, etc.) → respond with JSON toolCalls that DIRECTLY modify files. Do NOT stop at just readFile.
+- You may combine readFile + writeFile/modifyTimeline in the same response if needed, but the END RESULT must be a file change.
+
 PROJECT STRUCTURE:
 projects/proyek-remotion-1/
 - src/Composition.tsx      - Remotion video component (React TSX)
@@ -1459,13 +1582,16 @@ AVAILABLE TOOLS (respond with JSON matching this schema):
   "summary": "Short explanation in Indonesian (1-2 sentences)",
   "toolCalls": [
     {
-      "tool": "readFile | writeFile | deleteFile | listDirectory | runBashCommand | renderVideo",
+      "tool": "readFile | writeFile | deleteFile | listDirectory | runBashCommand | renderVideo | modifyTimeline",
       "path": "file path relative to project root (for file tools)",
       "content": "file content string (for writeFile)",
       "command": "shell command string (for runBashCommand)",
       "resolution": "720p | 1080p | 4K (for renderVideo)",
       "fps": 24 | 30 | 60 (for renderVideo),
-      "out": "output mp4 path (for renderVideo)"
+      "out": "output mp4 path (for renderVideo)",
+      "layerId": "layer id in timeline.json (for modifyTimeline)",
+      "clipId": "clip id in timeline.json (for modifyTimeline)",
+      "updates": "object with props/elementProps to merge into the clip (for modifyTimeline)"
     }
   ]
 }
@@ -1473,6 +1599,7 @@ AVAILABLE TOOLS (respond with JSON matching this schema):
 TOOL USAGE EXAMPLES:
 - Read timeline: {"tool": "readFile", "path": "timeline.json"}
 - Write new composition: {"tool": "writeFile", "path": "src/NewComp.tsx", "content": "..."}
+- Modify a clip's color & speed: {"tool": "modifyTimeline", "layerId": "layer-element", "clipId": "clip-el-1", "updates": {"elementProps": {"accent": "#d4af37", "speed": 1.5}, "props": {"accent": "#d4af37"}}}
 - Delete file: {"tool": "deleteFile", "path": "src/OldComp.tsx"}
 - List directory: {"tool": "listDirectory", "path": "src"}
 - Run terminal: {"tool": "runBashCommand", "command": "npm install @remotion/media"}
@@ -1481,6 +1608,7 @@ TOOL USAGE EXAMPLES:
 MODE SELECTION:
 - If user says hello/greeting/chat → plain text response in Indonesian, NO tools, NO JSON
 - If user asks to create/modify/render video files → respond with ONLY valid JSON matching schema above
+- When modifying: prefer modifyTimeline for targeted clip changes; use writeFile timeline.json only when you need to rewrite the whole timeline; use writeFile src/*.tsx for component code changes.
 
 Current timeline:
 ${JSON.stringify(currentTimelineData, null, 2)}
@@ -1757,6 +1885,11 @@ User request:
               } catch {}
             }
 
+            // Special handling: komponen src/*.tsx berubah → broadcast file_changed agar frontend merefresh
+            if (tc.tool === 'writeFile' && tc.path && tc.path.startsWith('src/') && tc.path.endsWith('.tsx')) {
+              broadcastSSE('file_changed', { file: tc.path, updated: true });
+            }
+
             // Special handling: render video → track render job
             if (tc.tool === 'renderVideo' && result.success) {
               broadcastSSE('render_completed', {
@@ -1775,6 +1908,132 @@ User request:
             toolCall.error = err?.message || String(err);
             broadcastSSE('tool_update', { messageId: aiMsgId, toolCall });
           }
+        }
+      }
+
+      // MULTI-TURN LOOP: kalau ronde pertama hanya readFile (investigasi) tanpa write/modify/render,
+      // panggil AI lagi dengan hasil baca agar langsung menulis perubahan ke file.
+      const firstRoundTools = (timelineChanges?.toolCalls || []).map((tc: any) => tc.tool);
+      const hasWriteOrModify = firstRoundTools.some((t) => t === 'writeFile' || t === 'modifyTimeline' || t === 'renderVideo');
+      const hasReadOnly = firstRoundTools.length > 0 && !hasWriteOrModify;
+
+      if (hasReadOnly && editingMode) {
+        agentStatus = 'thinking';
+        broadcastSSE('agent_status', { status: 'thinking' });
+
+        // Kumpulkan hasil readFile dari ronde pertama
+        const readResults: Array<{ tool: string; path: string; result: any }> = [];
+        for (const tc of timelineChanges.toolCalls || []) {
+          const executed = aiMessage.toolCalls.find((t: any) => t.toolName === tc.tool && t.target === (tc.path || tc.command || tc.tool));
+          if (tc.tool === 'readFile' && executed?.result) {
+            readResults.push({
+              tool: tc.tool,
+              path: tc.path,
+              result: executed.result,
+            });
+          }
+        }
+
+        // Bangun follow-up prompt dengan hasil baca
+        const followUpMessages = [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: text },
+          {
+            role: 'assistant',
+            content: JSON.stringify({
+              summary: 'Saya baru saja membaca file proyek untuk memahami struktur saat ini.',
+              toolCalls: (timelineChanges?.toolCalls || []).map((tc: any) => ({
+                tool: tc.tool,
+                path: tc.path,
+                result: 'sudah dibaca, lihat hasil di bawah',
+              })),
+            }),
+          },
+          {
+            role: 'user',
+            content: `Berikut hasil pembacaan file proyek:\n${readResults.map((r) => `\n--- ${r.path} ---\n${typeof r.result === 'string' ? r.result.slice(0, 3000) : JSON.stringify(r.result, null, 2).slice(0, 3000)}`).join('\n')}\n\nBerdasarkan hasil di atas, TULIS perubahan yang diminta user langsung ke file terkait (timeline.json atau src/*.tsx) menggunakan writeFile atau modifyTimeline. Jangan cuma readFile lagi.`,
+          },
+        ];
+
+        const followUpText = await callAI(followUpMessages, byok || context?.byok || undefined);
+
+        // Parse follow-up response untuk toolCalls
+        try {
+          const cleaned = followUpText
+            .replace(/^```json/im, '')
+            .replace(/^```/im, '')
+            .replace(/```$/m, '')
+            .trim();
+          const parsed = JSON.parse(cleaned);
+          if (parsed.toolCalls && Array.isArray(parsed.toolCalls)) {
+            for (const tc of parsed.toolCalls) {
+              const toolCall: any = {
+                id: 'tc-followup-' + tc.tool + '-' + Date.now(),
+                toolName: tc.tool,
+                description: `Eksekusi lanjutan ${tc.tool}`,
+                arguments: tc,
+                target: tc.path || tc.layerId || tc.command || tc.tool,
+                status: 'running',
+                timestamp: new Date().toISOString(),
+              };
+              aiMessage.toolCalls.push(toolCall);
+              broadcastSSE('tool_update', { messageId: aiMsgId, toolCall });
+
+              try {
+                const result = await executeTool(tc);
+                toolCall.status = 'completed';
+                toolCall.durationMs = 500;
+                toolCall.result = result;
+                broadcastSSE('tool_update', { messageId: aiMsgId, toolCall });
+
+                // broadcast file_changed untuk writeFile timeline.json
+                if (tc.tool === 'writeFile' && tc.path === 'timeline.json' && result.content) {
+                  try {
+                    const parsedTimeline = JSON.parse(result.content);
+                    broadcastSSE('file_changed', { file: 'timeline.json', timeline: parsedTimeline });
+                    const commitMsg = parsed.summary || `Perubahan oleh agent (follow-up): ${text.slice(0, 30)}`;
+                    const newHash = createGitCheckpoint(commitMsg, parsedTimeline);
+                    aiMessage.checkpointHash = newHash;
+                    aiMessage.canRevert = true;
+                  } catch {}
+                }
+
+                // broadcast file_changed untuk writeFile src/*.tsx (komponen berubah)
+                if (tc.tool === 'writeFile' && tc.path && tc.path.startsWith('src/') && tc.path.endsWith('.tsx')) {
+                  broadcastSSE('file_changed', { file: tc.path, updated: true });
+                }
+
+                // modifyTimeline support
+                if (tc.tool === 'modifyTimeline' && result.success) {
+                  broadcastSSE('file_changed', { file: 'timeline.json', timeline: result.timeline });
+                  const commitMsg = parsed.summary || `Perubahan oleh agent (modifyTimeline): ${text.slice(0, 30)}`;
+                  const newHash = createGitCheckpoint(commitMsg, result.timeline);
+                  aiMessage.checkpointHash = newHash;
+                  aiMessage.canRevert = true;
+                }
+
+                // render video
+                if (tc.tool === 'renderVideo' && result.success) {
+                  broadcastSSE('render_completed', {
+                    job: {
+                      id: 'rnd-' + Date.now(),
+                      status: 'completed',
+                      progress: 100,
+                      downloadUrl: result.downloadUrl,
+                      fileName: path.basename(result.outputPath),
+                      fileSize: result.sizeBytes,
+                    }
+                  });
+                }
+              } catch (err: any) {
+                toolCall.status = 'failed';
+                toolCall.error = err?.message || String(err);
+                broadcastSSE('tool_update', { messageId: aiMsgId, toolCall });
+              }
+            }
+          }
+        } catch {
+          // Follow-up response bukan JSON, abaikan
         }
       }
 
