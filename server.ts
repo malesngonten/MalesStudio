@@ -1393,6 +1393,9 @@ async function callAI(
         headers['Authorization'] = `Bearer ${activeByok.apiKey.trim()}`;
       }
 
+      const callController = new AbortController();
+      const callTimeout = setTimeout(() => callController.abort(), 60000);
+
       const apiRes = await fetch(targetUrl, {
         method: 'POST',
         headers,
@@ -1402,8 +1405,10 @@ async function callAI(
           temperature: 0.2,
           stream: false,
         }),
-        signal: activeCancellationController?.signal,
+        signal: callController.signal,
       });
+
+      clearTimeout(callTimeout);
 
       if (!apiRes.ok) {
         throw new Error(`HTTP ${apiRes.status}`);
@@ -1922,132 +1927,141 @@ User request:
 
       // MULTI-TURN LOOP: kalau ronde pertama hanya readFile (investigasi) tanpa write/modify/render,
       // panggil AI lagi dengan hasil baca agar langsung menulis perubahan ke file.
-      const firstRoundTools = (timelineChanges?.toolCalls || []).map((tc: any) => tc.tool);
-      const hasWriteOrModify = firstRoundTools.some((t) => t === 'writeFile' || t === 'modifyTimeline' || t === 'renderVideo');
-      const hasReadOnly = firstRoundTools.length > 0 && !hasWriteOrModify;
+      try {
+        const firstRoundTools = (timelineChanges?.toolCalls || []).map((tc: any) => tc.tool);
+        const hasWriteOrModify = firstRoundTools.some((t) => t === 'writeFile' || t === 'modifyTimeline' || t === 'renderVideo');
+        const hasReadOnly = firstRoundTools.length > 0 && !hasWriteOrModify;
 
-      if (hasReadOnly && editingMode) {
-        agentStatus = 'thinking';
-        broadcastSSE('agent_status', { status: 'thinking' });
+        if (hasReadOnly && editingMode) {
+          agentStatus = 'thinking';
+          broadcastSSE('agent_status', { status: 'thinking' });
 
-        // Kumpulkan hasil readFile dari ronde pertama
-        const readResults: Array<{ tool: string; path: string; result: any }> = [];
-        for (const tc of timelineChanges.toolCalls || []) {
-          const executed = aiMessage.toolCalls.find((t: any) => t.toolName === tc.tool && t.target === (tc.path || tc.command || tc.tool));
-          if (tc.tool === 'readFile' && executed?.result) {
-            readResults.push({
-              tool: tc.tool,
-              path: tc.path,
-              result: executed.result,
-            });
-          }
-        }
-
-        // Bangun follow-up prompt dengan hasil baca
-        const followUpMessages = [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: text },
-          {
-            role: 'assistant',
-            content: JSON.stringify({
-              summary: 'Saya baru saja membaca file proyek untuk memahami struktur saat ini.',
-              toolCalls: (timelineChanges?.toolCalls || []).map((tc: any) => ({
+          // Kumpulkan hasil readFile dari ronde pertama
+          const readResults: Array<{ tool: string; path: string; result: any }> = [];
+          for (const tc of timelineChanges.toolCalls || []) {
+            const executed = aiMessage.toolCalls.find((t: any) => t.toolName === tc.tool && t.target === (tc.path || tc.command || tc.tool));
+            if (tc.tool === 'readFile' && executed?.result) {
+              readResults.push({
                 tool: tc.tool,
                 path: tc.path,
-                result: 'sudah dibaca, lihat hasil di bawah',
-              })),
-            }),
-          },
-          {
-            role: 'user',
-            content: `Berikut hasil pembacaan file proyek:\n${readResults.map((r) => `\n--- ${r.path} ---\n${typeof r.result === 'string' ? r.result.slice(0, 3000) : JSON.stringify(r.result, null, 2).slice(0, 3000)}`).join('\n')}\n\nBerdasarkan hasil di atas, TULIS perubahan yang diminta user langsung ke file terkait (timeline.json atau src/*.tsx) menggunakan writeFile atau modifyTimeline. Jangan cuma readFile lagi.`,
-          },
-        ];
-
-        const followUpText = await callAI(followUpMessages, byok || context?.byok || undefined);
-
-        // Parse follow-up response untuk toolCalls
-        try {
-          const cleaned = followUpText
-            .replace(/^```json/im, '')
-            .replace(/^```/im, '')
-            .replace(/```$/m, '')
-            .trim();
-          const parsed = JSON.parse(cleaned);
-          if (parsed.toolCalls && Array.isArray(parsed.toolCalls)) {
-            for (const tc of parsed.toolCalls) {
-              const toolCall: any = {
-                id: 'tc-followup-' + tc.tool + '-' + Date.now(),
-                toolName: tc.tool,
-                description: `Eksekusi lanjutan ${tc.tool}`,
-                arguments: tc,
-                target: tc.path || tc.layerId || tc.command || tc.tool,
-                status: 'running',
-                timestamp: new Date().toISOString(),
-              };
-              aiMessage.toolCalls.push(toolCall);
-              broadcastSSE('tool_update', { messageId: aiMsgId, toolCall });
-
-              try {
-                const result = await executeTool(tc);
-                toolCall.status = 'completed';
-                toolCall.durationMs = 500;
-                toolCall.result = result;
-                broadcastSSE('tool_update', { messageId: aiMsgId, toolCall });
-
-                // broadcast file_changed untuk writeFile timeline.json
-                if (tc.tool === 'writeFile' && tc.path === 'timeline.json' && result.content) {
-                  try {
-                    const parsedTimeline = JSON.parse(result.content);
-                    broadcastSSE('file_changed', { file: 'timeline.json', timeline: parsedTimeline });
-                    const commitMsg = parsed.summary || `Perubahan oleh agent (follow-up): ${text.slice(0, 30)}`;
-                    const newHash = createGitCheckpoint(commitMsg, parsedTimeline);
-                    aiMessage.checkpointHash = newHash;
-                    aiMessage.canRevert = true;
-                  } catch {}
-                }
-
-                // broadcast file_changed untuk writeFile src/*.tsx (komponen berubah)
-                if (tc.tool === 'writeFile' && tc.path && tc.path.startsWith('src/') && tc.path.endsWith('.tsx')) {
-                  broadcastSSE('file_changed', { file: tc.path, updated: true });
-                }
-
-                // modifyTimeline support
-                if (tc.tool === 'modifyTimeline' && result.success) {
-                  broadcastSSE('file_changed', { file: 'timeline.json', timeline: result.timeline });
-                  const commitMsg = parsed.summary || `Perubahan oleh agent (modifyTimeline): ${text.slice(0, 30)}`;
-                  const newHash = createGitCheckpoint(commitMsg, result.timeline);
-                  aiMessage.checkpointHash = newHash;
-                  aiMessage.canRevert = true;
-                }
-
-                // render video
-                if (tc.tool === 'renderVideo' && result.success) {
-                  broadcastSSE('render_completed', {
-                    job: {
-                      id: 'rnd-' + Date.now(),
-                      status: 'completed',
-                      progress: 100,
-                      downloadUrl: result.downloadUrl,
-                      fileName: path.basename(result.outputPath),
-                      fileSize: result.sizeBytes,
-                    }
-                  });
-                }
-              } catch (err: any) {
-                toolCall.status = 'failed';
-                toolCall.error = err?.message || String(err);
-                broadcastSSE('tool_update', { messageId: aiMsgId, toolCall });
-              }
+                result: executed.result,
+              });
             }
           }
-        } catch {
-          // Follow-up response bukan JSON, abaikan
+
+          // Bangun follow-up prompt dengan hasil baca
+          const followUpMessages = [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: text },
+            {
+              role: 'assistant',
+              content: JSON.stringify({
+                summary: 'Saya baru saja membaca file proyek untuk memahami struktur saat ini.',
+                toolCalls: (timelineChanges?.toolCalls || []).map((tc: any) => ({
+                  tool: tc.tool,
+                  path: tc.path,
+                  result: 'sudah dibaca, lihat hasil di bawah',
+                })),
+              }),
+            },
+            {
+              role: 'user',
+              content: `Berikut hasil pembacaan file proyek:\n${readResults.map((r) => `\n--- ${r.path} ---\n${typeof r.result === 'string' ? r.result.slice(0, 3000) : JSON.stringify(r.result, null, 2).slice(0, 3000)}`).join('\n')}\n\nBerdasarkan hasil di atas, TULIS perubahan yang diminta user langsung ke file terkait (timeline.json atau src/*.tsx) menggunakan writeFile atau modifyTimeline. Jangan cuma readFile lagi.`,
+            },
+          ];
+
+          let followUpText = '';
+          try {
+            followUpText = await callAI(followUpMessages, byok || context?.byok || undefined);
+          } catch (callErr: any) {
+            console.error('[MULTI-TURN] callAI gagal:', callErr?.message || callErr);
+          }
+
+          // Parse follow-up response untuk toolCalls
+          try {
+            const cleaned = followUpText
+              .replace(/^```json/im, '')
+              .replace(/^```/im, '')
+              .replace(/```$/m, '')
+              .trim();
+            const parsed = JSON.parse(cleaned);
+            if (parsed.toolCalls && Array.isArray(parsed.toolCalls)) {
+              for (const tc of parsed.toolCalls) {
+                const toolCall: any = {
+                  id: 'tc-followup-' + tc.tool + '-' + Date.now(),
+                  toolName: tc.tool,
+                  description: `Eksekusi lanjutan ${tc.tool}`,
+                  arguments: tc,
+                  target: tc.path || tc.layerId || tc.command || tc.tool,
+                  status: 'running',
+                  timestamp: new Date().toISOString(),
+                };
+                aiMessage.toolCalls.push(toolCall);
+                broadcastSSE('tool_update', { messageId: aiMsgId, toolCall });
+
+                try {
+                  const result = await executeTool(tc);
+                  toolCall.status = 'completed';
+                  toolCall.durationMs = 500;
+                  toolCall.result = result;
+                  broadcastSSE('tool_update', { messageId: aiMsgId, toolCall });
+
+                  // broadcast file_changed untuk writeFile timeline.json
+                  if (tc.tool === 'writeFile' && tc.path === 'timeline.json' && result.content) {
+                    try {
+                      const parsedTimeline = JSON.parse(result.content);
+                      broadcastSSE('file_changed', { file: 'timeline.json', timeline: parsedTimeline });
+                      const commitMsg = parsed.summary || `Perubahan oleh agent (follow-up): ${text.slice(0, 30)}`;
+                      const newHash = createGitCheckpoint(commitMsg, parsedTimeline);
+                      aiMessage.checkpointHash = newHash;
+                      aiMessage.canRevert = true;
+                    } catch {}
+                  }
+
+                  // broadcast file_changed untuk writeFile src/*.tsx (komponen berubah)
+                  if (tc.tool === 'writeFile' && tc.path && tc.path.startsWith('src/') && tc.path.endsWith('.tsx')) {
+                    broadcastSSE('file_changed', { file: tc.path, updated: true });
+                  }
+
+                  // modifyTimeline support
+                  if (tc.tool === 'modifyTimeline' && result.success) {
+                    broadcastSSE('file_changed', { file: 'timeline.json', timeline: result.timeline });
+                    const commitMsg = parsed.summary || `Perubahan oleh agent (modifyTimeline): ${text.slice(0, 30)}`;
+                    const newHash = createGitCheckpoint(commitMsg, result.timeline);
+                    aiMessage.checkpointHash = newHash;
+                    aiMessage.canRevert = true;
+                  }
+
+                  // render video
+                  if (tc.tool === 'renderVideo' && result.success) {
+                    broadcastSSE('render_completed', {
+                      job: {
+                        id: 'rnd-' + Date.now(),
+                        status: 'completed',
+                        progress: 100,
+                        downloadUrl: result.downloadUrl,
+                        fileName: path.basename(result.outputPath),
+                        fileSize: result.sizeBytes,
+                      }
+                    });
+                  }
+                } catch (err: any) {
+                  toolCall.status = 'failed';
+                  toolCall.error = err?.message || String(err);
+                  broadcastSSE('tool_update', { messageId: aiMsgId, toolCall });
+                }
+              }
+            }
+          } catch {
+            // Follow-up response bukan JSON, abaikan
+          }
         }
+      } catch (loopErr: any) {
+        console.error('[MULTI-TURN LOOP] Error:', loopErr?.message || loopErr);
       }
 
       // Legacy support: old-style timelineChanges without toolCalls (backward compat)
-      else if (editingMode && timelineChanges && timelineChanges.timeline) {
+      if (editingMode && timelineChanges && timelineChanges.timeline && !timelineChanges.toolCalls) {
         agentStatus = 'executing_tool';
         broadcastSSE('agent_status', { status: 'executing_tool' });
 
