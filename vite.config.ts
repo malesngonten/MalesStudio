@@ -85,6 +85,7 @@ export default defineConfig(() => {
               '**/out/**',
               '**/node_modules/**',
               '**/projects/**',
+              '**/.ai_usage.json',
             ],
           },
     },
