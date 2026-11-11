@@ -107,6 +107,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   const [attachments, setAttachments] = useState<AgentAttachment[]>([]);
   const [expandedTools, setExpandedTools] = useState<Record<string, boolean>>({});
   const [isMultiLine, setIsMultiLine] = useState(false);
+  const [isToolPanelCollapsed, setIsToolPanelCollapsed] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -247,62 +248,58 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
       {/* Active Tool Calls Panel — AI agent file/terminal operations */}
       {activeToolCalls.length > 0 && (
-        <div className="mb-3 p-2.5 rounded-2xl bg-gradient-to-b from-[#181822] to-[#101015] shadow-xl max-h-[20vh] overflow-y-auto z-10">
-          <div className="flex items-center gap-2 mb-2">
-            <Terminal className="w-4 h-4 text-zinc-400" />
-            <span className="text-xs font-semibold text-zinc-300 uppercase tracking-wider">
-              AI Agent Tool Calls
+        <div className="mb-3 p-2 rounded-2xl bg-gradient-to-b from-[#181822] to-[#101015] shadow-xl max-h-[12vh] overflow-y-auto z-10">
+          {/* Collapse toggle */}
+          <button
+            type="button"
+            onClick={() => setIsToolPanelCollapsed(!isToolPanelCollapsed)}
+            className="flex items-center justify-between w-full mb-1"
+          >
+            <div className="flex items-center gap-1.5">
+              <Terminal className="w-3 h-3 text-zinc-400" />
+              <span className="text-[10px] font-semibold text-zinc-300 uppercase tracking-wider">
+                AI Agent Tool Calls
+              </span>
+            </div>
+            <span className={`text-[9px] text-zinc-500 font-mono ${isToolPanelCollapsed ? 'rotate-180' : ''}`}>
+              ▼
             </span>
-            <span className="ml-auto text-[10px] text-zinc-500 font-mono">
-              {activeToolCalls.filter((t) => t.status === 'running').length} running
-            </span>
-          </div>
-          <div className="space-y-2">
-            {activeToolCalls.map((tool) => (
-              <div
-                key={tool.id}
-                className={`p-2.5 rounded-xl shadow-xs ${
-                  tool.status === 'running'
-                    ? 'bg-zinc-800/60 animate-pulse'
-                    : tool.status === 'completed'
-                    ? 'bg-emerald-950/20'
-                    : 'bg-rose-950/20'
-                }`}
-              >
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-xs font-mono text-zinc-300">{tool.toolName}</span>
-                  <span
-                    className={`text-[10px] font-bold rounded-full px-2 py-0.5 ${
+          </button>
+
+          {!isToolPanelCollapsed && (
+            <div className="space-y-1 mt-1">
+              {activeToolCalls.map((tool) => (
+                <div
+                  key={tool.id}
+                  className={`p-1.5 rounded-xl shadow-xs ${
+                    tool.status === 'running'
+                      ? 'bg-zinc-800/60 animate-pulse'
+                      : tool.status === 'completed'
+                      ? 'bg-emerald-950/20'
+                      : 'bg-rose-950/20'
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-0.5">
+                    <span className="text-[9px] font-mono text-zinc-300">{tool.toolName}</span>
+                    <span className={`text-[8px] font-bold rounded-full px-1 py-0 ${
                       tool.status === 'running'
                         ? 'bg-amber-500/20 text-amber-300 animate-pulse'
                         : tool.status === 'completed'
                         ? 'bg-emerald-500/20 text-emerald-300'
                         : 'bg-rose-500/20 text-rose-300'
-                    }`}
-                  >
-                    {tool.status === 'running' ? 'Running' : tool.status === 'completed' ? 'Done' : 'Failed'}
-                  </span>
+                    }`}>
+                      {tool.status === 'running' ? 'Run' : tool.status === 'completed' ? 'Done' : 'Fail'}
+                    </span>
+                  </div>
+                  {(tool.description || tool.arguments) && (
+                    <div className="text-[9px] text-zinc-300 break-all">
+                      {tool.description || (tool.arguments ? JSON.stringify(tool.arguments).slice(0, 60) : '')}
+                    </div>
+                  )}
                 </div>
-                {(tool.description || tool.arguments) && (
-                  <div className="text-xs text-zinc-300 break-all">
-                    {tool.description || (tool.arguments ? JSON.stringify(tool.arguments).slice(0, 100) : '')}
-                  </div>
-                )}
-                {tool.result && (
-                  <div className="mt-1.5 text-[10px] text-zinc-400 break-all bg-black/40 p-2 rounded-lg">
-                    {typeof tool.result === 'object' && tool.result !== null
-                      ? (JSON.stringify(tool.result, null, 2) || '').slice(0, 200)
-                      : String(tool.result).slice(0, 200)}
-                  </div>
-                )}
-                {tool.status === 'failed' && tool.result && (
-                  <div className="mt-1.5 text-[10px] text-rose-300 break-all bg-rose-950/40 p-2 rounded-lg">
-                    {String(tool.result).slice(0, 200)}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
