@@ -247,7 +247,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
       {/* Active Tool Calls Panel — AI agent file/terminal operations */}
       {activeToolCalls.length > 0 && (
-        <div className="mb-4 p-3 rounded-2xl bg-gradient-to-b from-[#181822] to-[#101015] shadow-xl max-h-[40vh] overflow-y-auto">
+        <div className="mb-3 p-2.5 rounded-2xl bg-gradient-to-b from-[#181822] to-[#101015] shadow-xl max-h-[20vh] overflow-y-auto z-10">
           <div className="flex items-center gap-2 mb-2">
             <Terminal className="w-4 h-4 text-zinc-400" />
             <span className="text-xs font-semibold text-zinc-300 uppercase tracking-wider">
