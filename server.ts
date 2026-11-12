@@ -2660,8 +2660,26 @@ User request:
         // summary atau deskripsi ramah dari tool yang dijalankan.
         let displayText = aiRawResponse;
         let parsedOk = false;
-        // Status apakah respons AI terpotong token SEBELUM kita coba parse
-        const wasTruncated = aiFinishReason === 'length';
+        // Status dari streaming: apakah AI mengirim finish_reason='length' (token limit)
+        // Beberapa provider pakai 'length', beberapa 'stop', dan yang lain tidak kirim sama sekali.
+        // Kita cek nilai mentah dari streaming.
+        const wasTruncatedByLength = aiFinishReason === 'length';
+        // Nekatif kedua: apakah respons terlihat tidak lengkap karena terputus di tengah.
+        // Cek kombinasi: (1) respons pendek banget dibandingkan permintaan, ATau (2) respons
+        // tidak berakhir dengan tanda baca dan bukan array JSON yang lengkap.
+        const rawTrimmed = aiRawResponse.trim();
+        const userRequestTrimmed = text.trim();
+        // Jika user minta panjang tapi AI balas sangat sedikit (< 50 char untuk permintaan umum)
+        // atau respons tidak berakhir dengan tanda baca dan bukan array JSON — tandai sepertipaincomplete.
+        const looksIncomplete =
+          !wasTruncatedByLength &&
+          rawTrimmed.length > 0 &&
+          rawTrimmed.length < Math.max(20, userRequestTrimmed.length * 0.2) &&
+          !rawTrimmed.match(/^\[.*\]$/) &&
+          !rawTrimmed.endsWith('.') &&
+          !rawTrimmed.endsWith('!') &&
+          !rawTrimmed.endsWith('?');
+
         try {
           const normalized = normalizeAIResponse(parseAIJson(aiRawResponse));
           parsedOk = true;
@@ -2692,12 +2710,18 @@ User request:
         }
 
         // Jangan pernah tampilkan JSON mentah ke user
-        const trimmedRaw = aiRawResponse.trim();
-        // Jika AI sebenarnya terpotong token, tampilkan pesan khusus terlepas dari parsedOk
-        if (wasTruncated) {
+        // 1. Jika AI terpotong token (finish_reason: length) → tampilkan pesan khusus
+        if (wasTruncatedByLength) {
           displayText =
             'Respons AI terpotong karena batas token (finish_reason: length). Coba model dengan context/output lebih besar, atau minta perubahan yang lebih kecil.';
-        } else if (!parsedOk && (trimmedRaw.startsWith('{') || trimmedRaw.startsWith('['))) {
+        }
+        // 2. Nekatif: AI selesai tapi respons terlihat tidak lengkap (tidak ada titik/ekspansi, atau bentuk array kosa kata)
+        else if (looksIncomplete) {
+          displayText =
+            'Respons AI terpotong atau tidak lengkap. Coba kirim ulang prompt atau kurangi panjang permintaan.';
+        }
+        // 3. Nekatif: raw JSON tapi tidak valid/dikenali
+        else if (!parsedOk && (trimmedRaw.startsWith('{') || trimmedRaw.startsWith('['))) {
           displayText = 'AI mengirim respons yang tidak valid. Coba kirim ulang prompt.';
         }
 
