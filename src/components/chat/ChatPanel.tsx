@@ -364,11 +364,17 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                   {selectedClip.name}
                 </span>
                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/10 text-zinc-300 font-mono">
-                  {selectedClip.elementSlug ? 'Elemen Remocn' : selectedLayer?.type || 'Klip'}
+                  {selectedClip.elementSlug
+                    ? selectedClip.elementFile
+                      ? 'Fork • Editable'
+                      : 'Elemen Remocn'
+                    : selectedLayer?.type || 'Klip'}
                 </span>
               </div>
               <span className="text-[10px] text-zinc-400 font-mono truncate">
-                Frame {selectedClip.from}-{selectedClip.from + selectedClip.duration} • AI siap mengedit elemen ini
+                {selectedClip.elementFile
+                  ? selectedClip.elementFile
+                  : `Frame ${selectedClip.from}-${selectedClip.from + selectedClip.duration} • AI siap mengedit elemen ini`}
               </span>
             </div>
           </div>

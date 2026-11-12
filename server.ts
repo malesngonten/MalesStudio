@@ -972,7 +972,16 @@ async function executeTool(toolCall: any): Promise<any> {
         fs.mkdirSync(dir, { recursive: true });
       }
       fs.writeFileSync(targetPath, content || '', 'utf-8');
-      return { success: true, path: filePath, bytes: (content || '').length };
+
+      // Untuk timeline.json, sertakan hasil parse agar handler bisa broadcast + checkpoint
+      let parsedTimeline: any = undefined;
+      if (filePath === 'timeline.json') {
+        try {
+          parsedTimeline = JSON.parse(content || '{}');
+        } catch {}
+      }
+
+      return { success: true, path: filePath, bytes: (content || '').length, timeline: parsedTimeline };
     }
 
     case 'deleteFile': {
@@ -1384,7 +1393,7 @@ app.post('/api/agent/test-connection', async (req, res) => {
 
 // 5c. POST /api/agent/execute (Direct tool execution for AI agent)
 app.post('/api/agent/execute', async (req, res) => {
-  const { tool, path: filePath, content, command, resolution, fps, out } = req.body;
+  const { tool, path: filePath, content, command, resolution, fps, out, slug, layerId, clipId, updates } = req.body;
 
   if (!tool) {
     return res.status(400).json({ success: false, error: 'Tool wajib diisi.' });
@@ -1399,6 +1408,10 @@ app.post('/api/agent/execute', async (req, res) => {
       resolution,
       fps,
       out,
+      slug,
+      layerId,
+      clipId,
+      updates,
     });
 
     if (result.error) {
@@ -1406,10 +1419,9 @@ app.post('/api/agent/execute', async (req, res) => {
     }
 
     // Special handling for writeFile to timeline.json
-    if (tool === 'writeFile' && filePath === 'timeline.json' && result.content) {
+    if (tool === 'writeFile' && filePath === 'timeline.json' && result.timeline) {
       try {
-        const parsed = JSON.parse(result.content);
-        broadcastSSE('file_changed', { file: 'timeline.json', timeline: parsed });
+        broadcastSSE('file_changed', { file: 'timeline.json', timeline: result.timeline });
       } catch {}
     }
 
@@ -2001,12 +2013,11 @@ User request:
             broadcastSSE('tool_update', { messageId: aiMsgId, toolCall });
 
             // Special handling: timeline change → broadcast file_changed + git checkpoint
-            if (tc.tool === 'writeFile' && tc.path === 'timeline.json' && result.content) {
+            if (tc.tool === 'writeFile' && tc.path === 'timeline.json' && result.timeline) {
               try {
-                const parsed = JSON.parse(result.content);
-                broadcastSSE('file_changed', { file: 'timeline.json', timeline: parsed });
+                broadcastSSE('file_changed', { file: 'timeline.json', timeline: result.timeline });
                 const commitMsg = timelineChanges.summary || `Perubahan oleh agent: ${text.slice(0, 30)}`;
-                const newHash = createGitCheckpoint(commitMsg, parsed);
+                const newHash = createGitCheckpoint(commitMsg, result.timeline);
                 aiMessage.checkpointHash = newHash;
                 aiMessage.canRevert = true;
               } catch {}
@@ -2047,7 +2058,6 @@ User request:
             t === 'writeFile' ||
             t === 'modifyTimeline' ||
             t === 'renderVideo' ||
-            t === 'forkElementComponent' ||
             t === 'deleteFile'
         );
         const hasReadOnly = firstRoundTools.length > 0 && !hasWriteOrModify;
@@ -2069,9 +2079,14 @@ User request:
             }
           }
 
-          // Bangun follow-up prompt untuk AI agar menjawab dalam bahasa Indonesia (plain text, bukan JSON)
+          // Bangun follow-up prompt: AI sudah menerima hasil tool, lanjutkan tugas
           const followUpMessages = [
-            { role: 'system', content: systemPrompt + '\n\nIMPORTANT: User meminta penjelasan/deskripsi, BUKAN modifikasi file. Balas dalam bahasa Indonesia dengan plain text (bukan JSON). Jelaskan visual, style, dan animasi komponen berdasarkan hasil tool di atas.' },
+            {
+              role: 'system',
+              content:
+                systemPrompt +
+                `\n\nRONDE LANJUTAN (tool sudah dieksekusi):\n- Kamu sudah menerima hasil tool dari ronde sebelumnya.\n- Jika user meminta PERUBAHAN dan belum ada file yang diubah, lanjutkan dengan JSON toolCalls (mis. writeFile ke elementFile hasil fork, atau modifyTimeline).\n- Jika perubahan sudah selesai, atau user hanya meminta PENJELASAN/deskripsi visual, balas plain text bahasa Indonesia (bukan JSON).`,
+            },
             { role: 'user', content: text },
             {
               role: 'assistant',
@@ -2086,7 +2101,7 @@ User request:
             },
             {
               role: 'user',
-              content: `Berikut hasil eksekusi tool investigasi:\n${toolResults.map((r) => `\n--- ${r.tool} (${r.path}) ---\n${typeof r.result === 'string' ? r.result.slice(0, 4000) : JSON.stringify(r.result, null, 2).slice(0, 4000)}`).join('\n')}\n\nBerdasarkan hasil di atas, jelaskan dalam bahasa Indonesia tentang komponen yang sedang diedit: visualnya, style, dan animasinya. Balas dengan plain text, bukan JSON.`,
+              content: `Berikut hasil eksekusi tool investigasi:\n${toolResults.map((r) => `\n--- ${r.tool} (${r.path}) ---\n${typeof r.result === 'string' ? r.result.slice(0, 6000) : JSON.stringify(r.result, null, 2).slice(0, 6000)}`).join('\n')}\n\nLanjutkan tugas user. Jika perlu modifikasi file, balas JSON toolCalls. Jika user hanya minta penjelasan, balas plain text bahasa Indonesia.`,
             },
           ];
 
@@ -2150,12 +2165,11 @@ User request:
                     toolCall.result = result;
                     broadcastSSE('tool_update', { messageId: aiMsgId, toolCall });
 
-                    if (tc.tool === 'writeFile' && tc.path === 'timeline.json' && result.content) {
+                    if (tc.tool === 'writeFile' && tc.path === 'timeline.json' && result.timeline) {
                       try {
-                        const parsedTimeline = JSON.parse(result.content);
-                        broadcastSSE('file_changed', { file: 'timeline.json', timeline: parsedTimeline });
+                        broadcastSSE('file_changed', { file: 'timeline.json', timeline: result.timeline });
                         const commitMsg = parsed.summary || `Perubahan oleh agent (follow-up): ${text.slice(0, 30)}`;
-                        const newHash = createGitCheckpoint(commitMsg, parsedTimeline);
+                        const newHash = createGitCheckpoint(commitMsg, result.timeline);
                         aiMessage.checkpointHash = newHash;
                         aiMessage.canRevert = true;
                       } catch {}
@@ -2191,6 +2205,18 @@ User request:
                     broadcastSSE('tool_update', { messageId: aiMsgId, toolCall });
                   }
                 }
+              }
+
+              // Tampilkan summary ronde lanjutan (bukan JSON mentah) dan tandai selesai
+              if (parsed && (Array.isArray(parsed.toolCalls) || typeof parsed.summary === 'string')) {
+                const summaryText =
+                  typeof parsed.summary === 'string' && parsed.summary.trim()
+                    ? parsed.summary.trim()
+                    : 'Perubahan berhasil diterapkan oleh AI agent.';
+                aiMessage.content = summaryText;
+                aiMessage.text = summaryText;
+                aiMessage.status = 'completed';
+                multiTurnHandled = true;
               }
             } catch {
               // Follow-up response bukan JSON yang valid, abaikan

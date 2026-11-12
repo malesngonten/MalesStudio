@@ -41,6 +41,14 @@ const QUICK_PROMPTS = [
 
 const getContextualPrompts = (clip?: TimelineClip | null): string[] => {
   if (!clip) return QUICK_PROMPTS;
+  if (clip.elementFile) {
+    return [
+      '✏️ Edit kode komponen: ubah animasinya',
+      '🎨 Sesuaikan style visual di kode komponen',
+      '🧩 Tambah teks/elemen baru di bawahnya',
+      '↩️ Kembalikan komponen ke versi library',
+    ];
+  }
   if (clip.elementSlug === 'achievement-pop') {
     return [
       '🎨 Ganti warna aksen ke emas',
@@ -208,7 +216,11 @@ export const PromptDock: React.FC<PromptDockProps> = ({
                 {selectedClip.name}
               </span>
               <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-white/10 text-zinc-300 font-mono">
-                {selectedClip.elementSlug ? 'Elemen' : selectedLayer?.type || 'Klip'}
+                {selectedClip.elementSlug
+                  ? selectedClip.elementFile
+                    ? 'Fork'
+                    : 'Elemen'
+                  : selectedLayer?.type || 'Klip'}
               </span>
               <span className="text-[10px] text-zinc-400 font-mono hidden xs:inline">
                 ({selectedClip.from}-{selectedClip.from + selectedClip.duration}f)
