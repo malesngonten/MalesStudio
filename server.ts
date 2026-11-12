@@ -973,6 +973,12 @@ async function executeTool(toolCall: any): Promise<any> {
       }
       fs.writeFileSync(targetPath, content || '', 'utf-8');
 
+      // Selalu broadcast perubahan file agar preview/frontend langsung refresh
+      // (tidak perlu hard reset setelah AI menulis file).
+      if (filePath && filePath !== 'timeline.json') {
+        broadcastSSE('file_changed', { file: filePath, updated: true });
+      }
+
       // Untuk timeline.json, sertakan hasil parse agar handler bisa broadcast + checkpoint
       let parsedTimeline: any = undefined;
       if (filePath === 'timeline.json') {
@@ -982,6 +988,45 @@ async function executeTool(toolCall: any): Promise<any> {
       }
 
       return { success: true, path: filePath, bytes: (content || '').length, timeline: parsedTimeline };
+    }
+
+    case 'editFile': {
+      const targetPath = path.join(ACTIVE_PROJECT_DIR, filePath || '');
+      if (filePath.includes('..')) {
+        return { error: 'Path traversal forbidden' };
+      }
+      if (!fs.existsSync(targetPath)) {
+        return { error: `File not found: ${filePath}` };
+      }
+
+      const oldString = typeof toolCall.oldString === 'string' ? toolCall.oldString : '';
+      const newString = typeof toolCall.newString === 'string' ? toolCall.newString : '';
+      if (!oldString) {
+        return { error: 'editFile butuh "oldString" (potongan kode yang dicari)' };
+      }
+
+      const before = fs.readFileSync(targetPath, 'utf-8');
+      if (!before.includes(oldString)) {
+        return {
+          error: 'oldString tidak ditemukan di file. Baca ulang file dan salin potongan yang tepat.',
+        };
+      }
+
+      const after = toolCall.replaceAll
+        ? before.split(oldString).join(newString)
+        : before.replace(oldString, newString);
+
+      fs.writeFileSync(targetPath, after, 'utf-8');
+      broadcastSSE('file_changed', { file: filePath, updated: true });
+
+      return {
+        success: true,
+        path: filePath,
+        replacements: toolCall.replaceAll
+          ? before.split(oldString).length - 1
+          : 1,
+        bytes: after.length,
+      };
     }
 
     case 'deleteFile': {
@@ -1239,6 +1284,131 @@ function broadcastToolCall(messageId: string, toolCall: any) {
 }
 
 /* ========================================================
+ * AI RESPONSE NORMALIZATION
+ * LLM bisa membalas dalam beberapa format: schema studio,
+ * OpenAI tool_calls, single {tool}, array of tools, dll.
+ * Semua dinormalisasi agar tidak ada JSON mentah yang lolos ke chat.
+ * ======================================================== */
+let remocnCatalogCache: any[] | null = null;
+
+function getRemocnCatalog(): any[] {
+  if (remocnCatalogCache) return remocnCatalogCache;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(REMOCN_CATALOG_PATH, 'utf-8'));
+    remocnCatalogCache = Array.isArray(parsed) ? parsed : [];
+  } catch {
+    remocnCatalogCache = [];
+  }
+  return remocnCatalogCache;
+}
+
+function normalizeToolCall(raw: any): any | null {
+  if (!raw || typeof raw !== 'object') return null;
+
+  let tool: string | undefined;
+  let args: any = {};
+
+  // OpenAI-style: { function: { name, arguments: '{"path":"..."}' } }
+  if (raw.function && typeof raw.function === 'object') {
+    tool = raw.function.name;
+    const a = raw.function.arguments;
+    if (typeof a === 'string') {
+      try {
+        args = JSON.parse(a);
+      } catch {
+        args = {};
+      }
+    } else if (a && typeof a === 'object') {
+      args = a;
+    }
+  }
+
+  // Studio-style: { tool: 'readFile', path: '...', ... }
+  if (!tool && typeof raw.tool === 'string') tool = raw.tool;
+  if (!tool && typeof raw.name === 'string') tool = raw.name;
+
+  if (!tool) return null;
+
+  if (raw.arguments && typeof raw.arguments === 'object') {
+    args = { ...args, ...raw.arguments };
+  } else if (typeof raw.arguments === 'string' && Object.keys(args).length === 0) {
+    try {
+      args = JSON.parse(raw.arguments);
+    } catch {}
+  }
+
+  const { function: _fn, arguments: _args, tool: _tool, name: _name, ...rest } = raw;
+  return { tool, ...args, ...rest };
+}
+
+interface NormalizedAIResponse {
+  summary?: string;
+  toolCalls: any[];
+  timeline?: any;
+}
+
+function normalizeAIResponse(parsed: any): NormalizedAIResponse | null {
+  if (!parsed || typeof parsed !== 'object') return null;
+
+  const out: NormalizedAIResponse = { toolCalls: [] };
+
+  if (typeof parsed.summary === 'string' && parsed.summary.trim()) {
+    out.summary = parsed.summary.trim();
+  }
+
+  const push = (tc: any) => {
+    const normalized = normalizeToolCall(tc);
+    if (normalized) out.toolCalls.push(normalized);
+  };
+
+  const candidates = [
+    parsed.toolCalls,
+    parsed.tools,
+    parsed.tool_calls,
+    parsed.actions,
+    Array.isArray(parsed) ? parsed : null,
+  ];
+  for (const list of candidates) {
+    if (Array.isArray(list)) list.forEach(push);
+  }
+
+  if (typeof parsed.tool === 'string') push(parsed);
+  if (parsed.function && typeof parsed.function === 'object') push(parsed);
+
+  if (parsed.timeline && Array.isArray(parsed.timeline.layers)) {
+    out.timeline = parsed.timeline;
+  }
+
+  if (out.toolCalls.length === 0 && !out.timeline && !out.summary) return null;
+  return out;
+}
+
+function friendlyToolSummary(toolCalls: any[]): string {
+  const parts = toolCalls.map((tc) => {
+    const p = tc.path || tc.file || '';
+    switch (tc.tool) {
+      case 'readFile':
+        return p ? `Membaca \`${p}\`` : 'Membaca file';
+      case 'writeFile':
+        return p ? `Menulis \`${p}\`` : 'Menulis file';
+      case 'listDirectory':
+        return `Melihat isi folder \`${p || '.'}\``;
+      case 'modifyTimeline':
+        return 'Memperbarui clip di timeline';
+      case 'forkElementComponent':
+        return `Menyiapkan komponen \`${tc.slug || 'library'}\` untuk diedit`;
+      case 'renderVideo':
+        return 'Merender video';
+      case 'deleteFile':
+        return p ? `Menghapus \`${p}\`` : 'Menghapus file';
+      default:
+        return `Menjalankan ${tc.tool}`;
+    }
+  });
+  return parts.join(' • ');
+}
+
+/* ========================================================
  * API ENDPOINTS
  * ======================================================== */
 
@@ -1419,7 +1589,7 @@ app.post('/api/agent/test-connection', async (req, res) => {
 
 // 5c. POST /api/agent/execute (Direct tool execution for AI agent)
 app.post('/api/agent/execute', async (req, res) => {
-  const { tool, path: filePath, content, command, resolution, fps, out, slug, layerId, clipId, updates } = req.body;
+  const { tool, path: filePath, content, command, resolution, fps, out, slug, layerId, clipId, updates, oldString, newString, replaceAll } = req.body;
 
   if (!tool) {
     return res.status(400).json({ success: false, error: 'Tool wajib diisi.' });
@@ -1438,6 +1608,9 @@ app.post('/api/agent/execute', async (req, res) => {
       layerId,
       clipId,
       updates,
+      oldString,
+      newString,
+      replaceAll,
     });
 
     if (result.error) {
@@ -1495,7 +1668,7 @@ async function callAI(
       }
 
       const callController = new AbortController();
-      const callTimeout = setTimeout(() => callController.abort(), 60000);
+      const callTimeout = setTimeout(() => callController.abort(), 180000);
 
       const apiRes = await fetch(targetUrl, {
         method: 'POST',
@@ -1656,10 +1829,105 @@ app.post('/api/agent/prompt', async (req, res) => {
         currentTimelineData = DEFAULT_TIMELINE;
       }
 
+      // ========================================================
+      // AUTO-FORK + FOKUS ELEMEN
+      // 1. Setiap clip elemen yang belum punya elementFile otomatis di-fork
+      //    agar AI selalu punya source React yang bisa dibaca & diedit.
+      // 2. Tentukan elemen fokus: clip yang dipilih user ATAU elemen aktif
+      //    di playhead (supaya tidak perlu klik elemen dulu).
+      // ========================================================
+      let autoForkChanged = false;
+      try {
+        const catalog = getRemocnCatalog();
+        for (const layer of currentTimelineData?.layers || []) {
+          for (const clip of layer.clips || []) {
+            if (!clip.elementSlug) continue;
+            const relPath = clip.elementFile || `src/components/${clip.elementSlug}.element.tsx`;
+            const item = catalog.find((x: any) => x.slug === clip.elementSlug);
+            if (!item?.sourceCode) continue;
+
+            const targetPath = path.join(ACTIVE_PROJECT_DIR, relPath);
+            if (!fs.existsSync(targetPath)) {
+              fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+              fs.writeFileSync(targetPath, item.sourceCode, 'utf-8');
+            }
+            if (!clip.elementFile) {
+              clip.elementFile = relPath;
+              autoForkChanged = true;
+            }
+          }
+        }
+        if (autoForkChanged) {
+          fs.writeFileSync(timelinePath, JSON.stringify(currentTimelineData, null, 2), 'utf-8');
+          broadcastSSE('file_changed', { file: 'timeline.json', timeline: currentTimelineData });
+        }
+      } catch (autoForkErr: any) {
+        console.error('[AUTO-FORK] gagal:', autoForkErr?.message || autoForkErr);
+      }
+
+      // Tentukan elemen fokus (selected clip → fallback elemen aktif di playhead)
+      const playheadFrame = Number(context?.playheadFrame ?? 0) || 0;
+      let focusElementClip: any = null;
+      let focusElementLayerId: string | null = null;
+
+      if (context?.selectedClip) {
+        const sel = context.selectedClip;
+        for (const layer of currentTimelineData?.layers || []) {
+          const found = (layer.clips || []).find((c: any) => c.id === sel.id);
+          if (found) {
+            focusElementClip = found;
+            focusElementLayerId = layer.id;
+            break;
+          }
+        }
+        if (!focusElementClip && sel.elementSlug) {
+          focusElementClip = sel;
+          focusElementLayerId = (sel as any).layerId || null;
+        }
+      }
+
+      if (!focusElementClip?.elementSlug) {
+        const activeAtPlayhead: Array<{ clip: any; layerId: string }> = [];
+        for (const layer of currentTimelineData?.layers || []) {
+          for (const clip of layer.clips || []) {
+            if (
+              clip.elementSlug &&
+              playheadFrame >= clip.from &&
+              playheadFrame < clip.from + clip.duration
+            ) {
+              activeAtPlayhead.push({ clip, layerId: layer.id });
+            }
+          }
+        }
+        if (activeAtPlayhead.length > 0) {
+          const last = activeAtPlayhead[activeAtPlayhead.length - 1];
+          focusElementClip = last.clip;
+          focusElementLayerId = last.layerId;
+        }
+      }
+
+      // Baca source komponen fokus untuk dijadikan referensi visual di prompt
+      let focusComponentSource = '';
+      if (focusElementClip?.elementSlug) {
+        const relPath =
+          focusElementClip.elementFile || `src/components/${focusElementClip.elementSlug}.element.tsx`;
+        try {
+          const fullPath = path.join(ACTIVE_PROJECT_DIR, relPath);
+          if (fs.existsSync(fullPath)) {
+            let src = fs.readFileSync(fullPath, 'utf-8');
+            if (src.length > 28000) {
+              src = src.slice(0, 28000) + '\n\n/* ... source dipotong karena terlalu panjang ... */';
+            }
+            focusComponentSource = src;
+          }
+        } catch {}
+      }
+
       let aiRawResponse = '';
       let editingMode = false;
       let timelineChanges: any = null;
       let multiTurnHandled = false; // tandai kalau multi-turn loop sudah menangani respons
+      let aiFinishReason: string | null = null;
 
       // Helper: broadcast an AI text chunk to SSE clients in real time
       // Jika respons ternyata JSON edit-mode (diawali '{' atau ```json),
@@ -1721,7 +1989,8 @@ Decision tree:
      a. Baca file fork: readFile pada clip.elementFile.
      b. Jika clip belum punya elementFile → panggil forkElementComponent { slug, layerId, clipId }
         untuk menyalin source library ke src/components/<slug>.element.tsx dan menautkannya ke clip.
-     c. Tulis perubahan dengan writeFile ke path elementFile tersebut.
+     c. Edit kode dengan editFile (cari oldString → ganti newString) untuk perubahan terarah.
+        Gunakan writeFile hanya jika memang perlu menulis ulang seluruh file.
      d. JANGAN pernah mengedit src/remotion/elements/remocn/** (di luar project & global).
 3. Perubahan komposisi multi-elemen (teks tambahan muncul di bawah, layer baru, timing terpisah)
    → tambah/ubah clip & layer di timeline.json (modifyTimeline atau writeFile timeline.json).
@@ -1742,9 +2011,12 @@ AVAILABLE TOOLS (respond with JSON matching this schema):
   "summary": "Short explanation in Indonesian (1-2 sentences)",
   "toolCalls": [
     {
-      "tool": "readFile | writeFile | deleteFile | listDirectory | runBashCommand | renderVideo | modifyTimeline | forkElementComponent",
+      "tool": "readFile | writeFile | editFile | deleteFile | listDirectory | runBashCommand | renderVideo | modifyTimeline | forkElementComponent",
       "path": "file path relative to project root (for file tools / forkElementComponent)",
       "content": "file content string (for writeFile)",
+      "oldString": "potongan kode lama yang dicari (untuk editFile)",
+      "newString": "pengganti potongan kode lama (untuk editFile)",
+      "replaceAll": "true jika semua kemunculan oldString harus diganti (opsional, untuk editFile)",
       "command": "shell command string (for runBashCommand)",
       "resolution": "720p | 1080p | 4K (for renderVideo)",
       "fps": 24 | 30 | 60 (for renderVideo),
@@ -1762,7 +2034,8 @@ TOOL USAGE EXAMPLES:
 - Write new composition: {"tool": "writeFile", "path": "src/NewComp.tsx", "content": "..."}
 - Modify a clip's color & speed: {"tool": "modifyTimeline", "layerId": "layer-element", "clipId": "clip-el-1", "updates": {"elementProps": {"accent": "#d4af37", "speed": 1.5}, "props": {"accent": "#d4af37"}}}
 - Fork komponen library sebelum edit kode: {"tool": "forkElementComponent", "slug": "achievement-pop", "layerId": "layer-element", "clipId": "clip-el-1"}
-- Edit kode komponen fork: {"tool": "writeFile", "path": "src/components/achievement-pop.element.tsx", "content": "..."}
+- Edit potongan kode komponen: {"tool": "editFile", "path": "src/components/a-to-z.element.tsx", "oldString": "const ROLL_FRAMES = 30;", "newString": "const ROLL_FRAMES = 60;"}
+- Tulis ulang seluruh file (hanya jika perlu): {"tool": "writeFile", "path": "src/components/a-to-z.element.tsx", "content": "..."}
 - Delete file: {"tool": "deleteFile", "path": "src/OldComp.tsx"}
 - List directory: {"tool": "listDirectory", "path": "src"}
 - Run terminal: {"tool": "runBashCommand", "command": "npm install @remotion/media"}
@@ -1771,20 +2044,32 @@ TOOL USAGE EXAMPLES:
 MODE SELECTION:
 - If user says hello/greeting/chat → plain text response in Indonesian, NO tools, NO JSON
 - If user asks to create/modify/render video files → respond with ONLY valid JSON matching schema above
-- When modifying: prefer modifyTimeline for targeted clip changes; use writeFile timeline.json only when you need to rewrite the whole timeline; use writeFile src/*.tsx for component code changes.
+- When modifying: prefer modifyTimeline for targeted clip changes; use writeFile timeline.json only when you need to rewrite the whole timeline; for component code changes prefer editFile (surgical) and use writeFile only for full rewrites.
+- Jangan pernah membalas dengan JSON satu tool saja di luar schema (mis. {"tool":"readFile"} tanpa summary/toolCalls). Selalu bungkus dalam {"summary": "...", "toolCalls": [...]}.
 
 Current timeline:
 ${JSON.stringify(currentTimelineData, null, 2)}
 ${
-  context?.selectedClip
+  focusElementClip
     ? `
-SELECTED ELEMENT IN REMOTION PREVIEW:
-- Element Name: "${context.selectedClip.name}"
-- Element Slug: "${context.selectedClip.elementSlug || 'custom'}"
-- Clip ID: "${context.selectedClip.id}"
-- Element File (fork, editable): "${(context.selectedClip as any).elementFile || '(belum di-fork — panggil forkElementComponent jika butuh edit kode)'}"
-- Active Props: ${JSON.stringify(context.selectedClip.elementProps || context.selectedClip.props || {})}
-NOTE: The user currently has this specific element selected in the preview. If their request refers to "elemen ini", "komponen ini", "warnanya", "teksnya", "kecepatannya", or similar edits, apply the requested changes directly to this element's props or elementProps in timeline.json! If the request needs NEW structure/animation not covered by propsSchema, edit the elementFile (fork) instead.
+FOKUS ELEMEN (clip yang dipilih user atau yang aktif di playhead):
+- Element Name: "${focusElementClip.name}"
+- Element Slug: "${focusElementClip.elementSlug || 'custom'}"
+- Clip ID: "${focusElementClip.id}"
+- Layer ID: "${focusElementLayerId || '(cari di timeline)'}"
+- Element File (fork, editable): "${focusElementClip.elementFile || '(belum ada — panggil forkElementComponent)'}"
+- Active Props: ${JSON.stringify(focusElementClip.elementProps || focusElementClip.props || {})}
+
+KOMPONEN SOURCE (referensi visual WAJIB — jangan mengarang style baru):
+\`\`\`tsx
+${focusComponentSource || '/* Source komponen tidak tersedia. Panggil forkElementComponent lalu readFile. */'}
+\`\`\`
+
+ATURAN FOKUS ELEMEN (WAJIB):
+- Jika user meminta perubahan pada elemen ini — animasi, teks/huruf di dalamnya, warna, style, efek, "di bawahnya muncul tulisan", atau perubahan visual lain — WAJIB edit file elementFile di atas dengan writeFile.
+- JANGAN menambah clip/layer teks baru ke timeline untuk hal yang seharusnya menjadi bagian dari komponen ini. Menambah clip hanya jika user eksplisit meminta layer terpisah.
+- Pertahankan bahasa visual source: font family, palet warna, ukuran, easing/spring, durasi, dan layout. Integrasikan perubahan secara koheren — jangan mengganti gaya dengan style generik.
+- Setelah edit kode, clip tetap memakai elementFile yang sama; tidak perlu mengubah timeline kecuali durasi/posisi/props instance.
 `
     : ''
 }
@@ -1853,7 +2138,11 @@ User request:
                   if (dataStr === '[DONE]') continue;
                   try {
                     const data = JSON.parse(dataStr);
-                    const delta = data.choices?.[0]?.delta;
+                    const choice = data.choices?.[0];
+                    if (choice?.finish_reason) {
+                      aiFinishReason = choice.finish_reason;
+                    }
+                    const delta = choice?.delta;
                     if (delta && typeof delta.content === 'string' && delta.content.length > 0) {
                       streamAiChunk(delta.content);
                     }
@@ -1905,12 +2194,13 @@ User request:
                 .replace(/```$/m, '')
                 .trim();
               const parsed = JSON.parse(cleaned);
-              if (parsed.timeline && Array.isArray(parsed.timeline.layers)) {
+              const normalized = normalizeAIResponse(parsed);
+              if (normalized?.timeline) {
                 editingMode = true;
-                timelineChanges = parsed;
-              } else if (parsed.toolCalls && Array.isArray(parsed.toolCalls)) {
+                timelineChanges = normalized;
+              } else if (normalized?.toolCalls?.length) {
                 editingMode = true;
-                timelineChanges = parsed;
+                timelineChanges = normalized;
               }
             } catch {
               // Not JSON - that's fine, it's CHAT mode
@@ -1975,12 +2265,13 @@ User request:
               .replace(/```$/m, '')
               .trim();
             const parsed = JSON.parse(cleaned);
-            if (parsed.timeline && Array.isArray(parsed.timeline.layers)) {
+            const normalized = normalizeAIResponse(parsed);
+            if (normalized?.timeline) {
               editingMode = true;
-              timelineChanges = parsed;
-            } else if (parsed.toolCalls && Array.isArray(parsed.toolCalls)) {
+              timelineChanges = normalized;
+            } else if (normalized?.toolCalls?.length) {
               editingMode = true;
-              timelineChanges = parsed;
+              timelineChanges = normalized;
             }
           } catch {
             // Not JSON - CHAT mode
@@ -2082,6 +2373,7 @@ User request:
         const hasWriteOrModify = firstRoundTools.some(
           (t) =>
             t === 'writeFile' ||
+            t === 'editFile' ||
             t === 'modifyTimeline' ||
             t === 'renderVideo' ||
             t === 'deleteFile'
@@ -2170,8 +2462,9 @@ User request:
             // Kalau masih JSON dengan toolCalls, eksekusi lanjutan
             try {
               const parsed = JSON.parse(cleaned);
-              if (parsed.toolCalls && Array.isArray(parsed.toolCalls)) {
-                for (const tc of parsed.toolCalls) {
+              const normalized = normalizeAIResponse(parsed);
+              if (normalized?.toolCalls?.length) {
+                for (const tc of normalized.toolCalls) {
                   const toolCall: any = {
                     id: 'tc-followup-' + tc.tool + '-' + Date.now(),
                     toolName: tc.tool,
@@ -2194,7 +2487,7 @@ User request:
                     if (tc.tool === 'writeFile' && tc.path === 'timeline.json' && result.timeline) {
                       try {
                         broadcastSSE('file_changed', { file: 'timeline.json', timeline: result.timeline });
-                        const commitMsg = parsed.summary || `Perubahan oleh agent (follow-up): ${text.slice(0, 30)}`;
+                        const commitMsg = normalized.summary || `Perubahan oleh agent (follow-up): ${text.slice(0, 30)}`;
                         const newHash = createGitCheckpoint(commitMsg, result.timeline);
                         aiMessage.checkpointHash = newHash;
                         aiMessage.canRevert = true;
@@ -2207,7 +2500,7 @@ User request:
 
                     if (tc.tool === 'modifyTimeline' && result.success) {
                       broadcastSSE('file_changed', { file: 'timeline.json', timeline: result.timeline });
-                      const commitMsg = parsed.summary || `Perubahan oleh agent (modifyTimeline): ${text.slice(0, 30)}`;
+                      const commitMsg = normalized.summary || `Perubahan oleh agent (modifyTimeline): ${text.slice(0, 30)}`;
                       const newHash = createGitCheckpoint(commitMsg, result.timeline);
                       aiMessage.checkpointHash = newHash;
                       aiMessage.canRevert = true;
@@ -2234,11 +2527,12 @@ User request:
               }
 
               // Tampilkan summary ronde lanjutan (bukan JSON mentah) dan tandai selesai
-              if (parsed && (Array.isArray(parsed.toolCalls) || typeof parsed.summary === 'string')) {
+              if (normalized) {
                 const summaryText =
-                  typeof parsed.summary === 'string' && parsed.summary.trim()
-                    ? parsed.summary.trim()
-                    : 'Perubahan berhasil diterapkan oleh AI agent.';
+                  normalized.summary ||
+                  (normalized.toolCalls.length > 0
+                    ? friendlyToolSummary(normalized.toolCalls)
+                    : 'Respons AI tidak dikenali. Coba kirim ulang prompt.');
                 aiMessage.content = summaryText;
                 aiMessage.text = summaryText;
                 aiMessage.status = 'completed';
@@ -2311,9 +2605,10 @@ User request:
       // Mark as completed - streaming is done, provider finished successfully
       if (!multiTurnHandled) {
         aiMessage.status = 'completed';
-        // Jika respons AI adalah JSON dengan field summary, tampilkan hanya
-        // nilai summary di chat. JSON toolCalls adalah kontrak internal backend.
+        // JSON adalah kontrak internal backend. Yang tampil di chat hanya
+        // summary atau deskripsi ramah dari tool yang dijalankan.
         let displayText = aiRawResponse;
+        let parsedOk = false;
         try {
           const cleaned = aiRawResponse
             .replace(/^```json/im, '')
@@ -2321,15 +2616,28 @@ User request:
             .replace(/```$/m, '')
             .trim();
           const parsed = JSON.parse(cleaned);
-          if (parsed && typeof parsed.summary === 'string' && parsed.summary.trim()) {
-            displayText = parsed.summary.trim();
-          } else if (parsed && Array.isArray(parsed.toolCalls) && parsed.toolCalls.length > 0) {
-            const toolNames = parsed.toolCalls.map((tc: any) => tc.tool).join(', ');
-            displayText = `Menyiapkan perubahan: ${toolNames}`;
+          parsedOk = true;
+          const normalized = normalizeAIResponse(parsed);
+          if (normalized?.summary) {
+            displayText = normalized.summary;
+          } else if (normalized?.timeline) {
+            displayText = 'Timeline video berhasil diperbarui.';
+          } else if (normalized?.toolCalls?.length) {
+            displayText = friendlyToolSummary(normalized.toolCalls);
           }
         } catch {
-          // Bukan JSON — tampilkan respons apa adanya (chat mode)
+          // Bukan JSON — chat mode, tampilkan apa adanya
         }
+
+        // Jangan pernah tampilkan JSON mentah ke user
+        const trimmedRaw = aiRawResponse.trim();
+        if (!parsedOk && aiFinishReason === 'length') {
+          displayText =
+            'Respons AI terpotong karena batas token (finish_reason: length). Coba model dengan context/output lebih besar, atau minta perubahan yang lebih kecil.';
+        } else if (!parsedOk && (trimmedRaw.startsWith('{') || trimmedRaw.startsWith('['))) {
+          displayText = 'AI mengirim respons yang tidak valid. Coba kirim ulang prompt.';
+        }
+
         aiMessage.content = displayText;
         aiMessage.text = displayText;
       }
@@ -2745,9 +3053,59 @@ app.delete('/api/renders/:id', (req, res) => {
 });
 
 /* ========================================================
+ * STARTUP MIGRATION: FORK SEMUA CLIP ELEMEN LAMA
+ * Clip lama (sebelum fitur fork) belum punya elementFile.
+ * Saat boot, salin source library ke src/components/<slug>.element.tsx
+ * dan tautkan ke clip agar AI selalu bisa membaca style-nya.
+ * ======================================================== */
+function migrateElementForks() {
+  try {
+    const timelineData = JSON.parse(fs.readFileSync(timelinePath, 'utf-8'));
+    const catalog = getRemocnCatalog();
+    let changed = false;
+    let forked = 0;
+
+    for (const layer of timelineData.layers || []) {
+      for (const clip of layer.clips || []) {
+        if (!clip.elementSlug) continue;
+
+        const relPath = clip.elementFile || `src/components/${clip.elementSlug}.element.tsx`;
+        const item = catalog.find((x: any) => x.slug === clip.elementSlug);
+        if (!item?.sourceCode) continue;
+
+        const targetPath = path.join(ACTIVE_PROJECT_DIR, relPath);
+        if (!fs.existsSync(targetPath)) {
+          fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+          fs.writeFileSync(targetPath, item.sourceCode, 'utf-8');
+          forked++;
+        }
+
+        if (!clip.elementFile) {
+          clip.elementFile = relPath;
+          changed = true;
+        }
+      }
+    }
+
+    if (changed) {
+      fs.writeFileSync(timelinePath, JSON.stringify(timelineData, null, 2), 'utf-8');
+      broadcastSSE('file_changed', { file: 'timeline.json', timeline: timelineData });
+    }
+
+    if (changed || forked > 0) {
+      console.log(`[AUTO-FORK] Migrasi selesai: ${forked} file fork dibuat, ${changed ? 'timeline diperbarui' : 'timeline sudah tertaut'}.`);
+    }
+  } catch (err: any) {
+    console.error('[AUTO-FORK] Migrasi gagal:', err?.message || err);
+  }
+}
+
+/* ========================================================
  * VITE MIDDLEWARE INTEGRATION (PORT 3000 DEV SERVER)
  * ======================================================== */
 async function startServer() {
+  migrateElementForks();
+
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
