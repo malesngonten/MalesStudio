@@ -2672,13 +2672,21 @@ User request:
           } else if (normalized?.toolCalls?.length) {
             displayText = friendlyToolSummary(normalized.toolCalls);
           } else {
-            // AI tidak mengirim JSON yang dikenali (tanpa summary/timeline/toolCalls)
-            // tampilkan pesan biasa, jangan tampilkan respons mentah
-            displayText = 'AI mengirim respons yang tidak valid. Coba kirim ulang prompt.';
-            parsedOk = false; // agar pengecekan di bawah bisa bekerja
+            // AI tidak mengirim JSON yang dikenali melalui pola biasa.
+            // Coba ekstrak konten teks biasa dari respons (bukan menampilkan JSON mentah).
+            const rawTrimmed = aiRawResponse.trim();
+            // Jika respons mulai dengan { atau [, kemungkinan AI salah format JSON → jangan tampilkan
+            if (rawTrimmed.startsWith('{') || rawTrimmed.startsWith('[')) {
+              displayText = 'AI mengirim respons yang tidak valid. Coba kirim ulang prompt.';
+            } else {
+              // Respons teks biasa (explanatory, dll) → tampilkan ringkasan potongan awal
+              const textSummary = rawTrimmed.slice(0, 300) + (rawTrimmed.length > 300 ? '...' : '');
+              displayText = textSummary;
+            }
+            // parsedOk tetap true karena kita menampilkan respons yang ada, bukan menutup koneksi
           }
         } catch {
-          // Bukan JSON — chat mode, tampilkan apa adanya
+          // Bukan JSON — chat mode, tampilkan respons apa adanya (sudah di-init displayText = aiRawResponse)
         }
 
         // Jangan pernah tampilkan JSON mentah ke user
