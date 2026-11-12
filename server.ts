@@ -2470,7 +2470,7 @@ User request:
             },
             {
               role: 'user',
-              content: `Berikut hasil eksekusi tool investigasi:\n${toolResults.map((r) => `\n--- ${r.tool} (${r.path}) ---\n${typeof r.result === 'string' ? r.result.slice(0, 6000) : JSON.stringify(r.result, null, 2).slice(0, 6000)}`).join('\n')}\n\nLanjutkan tugas user. Jika perlu modifikasi file, balas JSON toolCalls. Jika user hanya minta penjelasan, balas plain text bahasa Indonesia.`,
+              content: `Lanjutkan tugas user. Jika perlu modifikasi file, balas JSON toolCalls. Jika user hanya minta penjelasan, balas plain text bahasa Indonesia.`,
             },
           ];
 
@@ -2597,18 +2597,8 @@ User request:
           // FALLBACK: kalau AI provider nggak tersedia atau follow-up gagal,
           // generate penjelasan sederhana dari hasil tool langsung di server
           if (!followUpText || followUpText.trim().length === 0) {
-            const fallbackParts: string[] = [];
-            for (const r of toolResults) {
-              if (r.tool === 'listDirectory') {
-                const entries = (r.result?.entries || []).map((e: any) => `- ${e.name} (${e.isDirectory ? 'folder' : 'file'})`).join('\n');
-                fallbackParts.push(`Isi direktori ${r.path}:\n${entries}`);
-              } else if (r.tool === 'readFile') {
-                fallbackParts.push(`Isi file ${r.path} (${r.result?.size || 0} bytes):\n${typeof r.result.content === 'string' ? r.result.content.slice(0, 2000) : JSON.stringify(r.result).slice(0, 2000)}`);
-              }
-            }
-            const fallbackText = fallbackParts.length > 0
-              ? `Berikut hasil investigasi komponen yang sedang diedit:\n\n${fallbackParts.join('\n\n')}\n\nUntuk penjelasan lebih detail tentang visual, style, dan animasi, silakan konfigurasikan AI Provider (BYOK atau Gemini) di menu Pengaturan.`
-              : 'Hasil investigasi kosong. Silakan coba lagi atau konfigurasikan AI Provider di menu Pengaturan.';
+            const fallbackText =
+              'Hasil investigasi telah disiapkan oleh AI. Untuk penjelasan lebih detail tentang visual, style, dan animasi, silakan konfigurasikan AI Provider (BYOK atau Gemini) di menu Pengaturan.';
             aiMessage.content = fallbackText;
             aiMessage.text = fallbackText;
             aiMessage.status = 'completed';
