@@ -53,6 +53,7 @@ const CHATS_DIR = path.join(ACTIVE_PROJECT_DIR, '.males_ngonten', 'chats');
 const CHECKPOINTS_DIR = path.join(ACTIVE_PROJECT_DIR, '.males_ngonten', 'checkpoints');
 const CHECKPOINTS_INDEX_PATH = path.join(CHECKPOINTS_DIR, 'index.json');
 const SCRIPTS_DIR = path.join(WORKSPACE_DIR, 'scripts');
+const REMOCN_CATALOG_PATH = path.join(WORKSPACE_DIR, 'src', 'remotion', 'elements', 'remocn-catalog.json');
 
 // Ensure base project directories exist
 [PROJECTS_BASE, ACTIVE_PROJECT_DIR, OUT_DIR, ASSETS_DIR, CHATS_DIR, CHECKPOINTS_DIR, path.join(ACTIVE_PROJECT_DIR, 'src'), SCRIPTS_DIR].forEach((dir) => {
@@ -1084,6 +1085,68 @@ async function executeTool(toolCall: any): Promise<any> {
       });
     }
 
+    case 'forkElementComponent': {
+      try {
+        const slug = toolCall.slug || toolCall.elementSlug;
+        if (!slug) {
+          return { error: 'forkElementComponent butuh "slug" komponen library' };
+        }
+
+        const catalogRaw = fs.readFileSync(REMOCN_CATALOG_PATH, 'utf-8');
+        const catalog = JSON.parse(catalogRaw);
+        const item = Array.isArray(catalog) ? catalog.find((x: any) => x.slug === slug) : null;
+        if (!item || !item.sourceCode) {
+          return { error: `Komponen "${slug}" tidak ditemukan di library remocn` };
+        }
+
+        const relPath = String(toolCall.path || `src/components/${slug}.element.tsx`);
+        if (relPath.includes('..')) {
+          return { error: 'Path traversal forbidden' };
+        }
+        const targetPath = path.join(ACTIVE_PROJECT_DIR, relPath);
+        fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+
+        // Idempotent: jangan timpa fork yang sudah pernah diedit
+        const alreadyExists = fs.existsSync(targetPath);
+        if (!alreadyExists) {
+          fs.writeFileSync(targetPath, item.sourceCode, 'utf-8');
+        }
+        const fileContent = fs.readFileSync(targetPath, 'utf-8');
+
+        // Link clip di timeline ke file fork (jika layerId & clipId diberikan)
+        let updatedTimeline: any = null;
+        if (toolCall.layerId && toolCall.clipId) {
+          const timelineData = JSON.parse(fs.readFileSync(timelinePath, 'utf-8'));
+          const layer = timelineData.layers?.find((l: any) => l.id === toolCall.layerId);
+          if (!layer) {
+            return { error: `Layer ${toolCall.layerId} tidak ditemukan` };
+          }
+          const clip = layer.clips?.find((c: any) => c.id === toolCall.clipId);
+          if (!clip) {
+            return { error: `Clip ${toolCall.clipId} tidak ditemukan di layer ${toolCall.layerId}` };
+          }
+          clip.elementFile = relPath;
+          fs.writeFileSync(timelinePath, JSON.stringify(timelineData, null, 2), 'utf-8');
+          broadcastSSE('file_changed', { file: 'timeline.json', timeline: timelineData });
+          updatedTimeline = timelineData;
+        }
+
+        broadcastSSE('file_changed', { file: relPath, updated: true });
+
+        return {
+          success: true,
+          path: relPath,
+          bytes: fileContent.length,
+          alreadyExisted: alreadyExists,
+          linkedClip: Boolean(toolCall.layerId && toolCall.clipId),
+          timeline: updatedTimeline || undefined,
+          note: 'File fork siap diedit dengan writeFile. Preview studio memuat file ini via clip.elementFile.',
+        };
+      } catch (err: any) {
+        return { error: err?.message || String(err) };
+      }
+    }
+
     case 'modifyTimeline': {
       return new Promise((resolve) => {
         try {
@@ -1597,35 +1660,60 @@ You operate on a local file system and have terminal access. You can read, write
 FREEDOM:
 - You have FULL freedom to READ and EDIT every file in the project, including:
   - timeline.json (source of truth for layers, clips, durations, elementProps)
+  - src/components/*.element.tsx (forked component source — editable React code)
   - src/Composition.tsx (main Remotion composition)
-  - src/*.element.tsx (any element component installed from library)
   - assets.json, GEMINI.md, scripts/*
 - If the user request is a clear modification (change color, text, duration, animation, position, speed, etc.) → respond with JSON toolCalls that DIRECTLY modify files. Do NOT stop at just readFile.
 - You may combine readFile + writeFile/modifyTimeline in the same response if needed, but the END RESULT must be a file change.
 
+COMPONENT EDITING MODEL (instance vs blueprint) — WAJIB DIPATUHI:
+Setiap clip elemen punya tiga field penting di timeline.json:
+- elementSlug  → referensi ke komponen library remocn (blueprint asli, JANGAN diedit)
+- elementFile  → path file fork milik proyek, mis. "src/components/achievement-pop.element.tsx" (blueprint yang BOLEH diedit)
+- elementProps → nilai props untuk instance/clip ini (instance)
+- propsSchema komponen menentukan props apa saja yang didukung.
+
+Decision tree:
+1. Perubahan masih tercakup propsSchema (warna, teks, durasi, speed, accent, dsb.)
+   → modifyTimeline dengan updates.elementProps. JANGAN sentuh kode komponen.
+   Alasan: satu slug bisa dipakai banyak clip; edit kode = mengubah semua instance.
+2. Perubahan butuh struktur/behavior/animasi baru yang TIDAK punya prop
+   (mis. "animasi roll sampai huruf M", "tambah partikel", "tulisan trademark di bawah")
+   → EDIT KODE REACT:
+     a. Baca file fork: readFile pada clip.elementFile.
+     b. Jika clip belum punya elementFile → panggil forkElementComponent { slug, layerId, clipId }
+        untuk menyalin source library ke src/components/<slug>.element.tsx dan menautkannya ke clip.
+     c. Tulis perubahan dengan writeFile ke path elementFile tersebut.
+     d. JANGAN pernah mengedit src/remotion/elements/remocn/** (di luar project & global).
+3. Perubahan komposisi multi-elemen (teks tambahan muncul di bawah, layer baru, timing terpisah)
+   → tambah/ubah clip & layer di timeline.json (modifyTimeline atau writeFile timeline.json).
+4. Ragu antara (1) dan (2): cek propsSchema komponen dulu; jika prop tersedia → jalur (1).
+
 PROJECT STRUCTURE:
 projects/proyek-remotion-1/
-- src/Composition.tsx      - Remotion video component (React TSX)
-- timeline.json            - Timeline definition (layers, clips, durations)
-- assets.json              - Asset list (images, video, audio, fonts)
-- GEMINI.md                - Project rules & style guide
-- out/                     - Rendered MP4 videos
-- scripts/render-cli.mjs   - Remotion render CLI
+- timeline.json                    - Timeline definition (layers, clips, durations)
+- src/Composition.tsx              - Remotion video component (React TSX)
+- src/components/*.element.tsx     - Fork komponen library (boleh diedit AI)
+- assets.json                      - Asset list (images, video, audio, fonts)
+- GEMINI.md                        - Project rules & style guide
+- out/                             - Rendered MP4 videos
+- scripts/render-cli.mjs           - Remotion render CLI
 
 AVAILABLE TOOLS (respond with JSON matching this schema):
 {
   "summary": "Short explanation in Indonesian (1-2 sentences)",
   "toolCalls": [
     {
-      "tool": "readFile | writeFile | deleteFile | listDirectory | runBashCommand | renderVideo | modifyTimeline",
-      "path": "file path relative to project root (for file tools)",
+      "tool": "readFile | writeFile | deleteFile | listDirectory | runBashCommand | renderVideo | modifyTimeline | forkElementComponent",
+      "path": "file path relative to project root (for file tools / forkElementComponent)",
       "content": "file content string (for writeFile)",
       "command": "shell command string (for runBashCommand)",
       "resolution": "720p | 1080p | 4K (for renderVideo)",
       "fps": 24 | 30 | 60 (for renderVideo),
       "out": "output mp4 path (for renderVideo)",
-      "layerId": "layer id in timeline.json (for modifyTimeline)",
-      "clipId": "clip id in timeline.json (for modifyTimeline)",
+      "layerId": "layer id in timeline.json (for modifyTimeline / forkElementComponent)",
+      "clipId": "clip id in timeline.json (for modifyTimeline / forkElementComponent)",
+      "slug": "element slug from library (for forkElementComponent)",
       "updates": "object with props/elementProps to merge into the clip (for modifyTimeline)"
     }
   ]
@@ -1635,6 +1723,8 @@ TOOL USAGE EXAMPLES:
 - Read timeline: {"tool": "readFile", "path": "timeline.json"}
 - Write new composition: {"tool": "writeFile", "path": "src/NewComp.tsx", "content": "..."}
 - Modify a clip's color & speed: {"tool": "modifyTimeline", "layerId": "layer-element", "clipId": "clip-el-1", "updates": {"elementProps": {"accent": "#d4af37", "speed": 1.5}, "props": {"accent": "#d4af37"}}}
+- Fork komponen library sebelum edit kode: {"tool": "forkElementComponent", "slug": "achievement-pop", "layerId": "layer-element", "clipId": "clip-el-1"}
+- Edit kode komponen fork: {"tool": "writeFile", "path": "src/components/achievement-pop.element.tsx", "content": "..."}
 - Delete file: {"tool": "deleteFile", "path": "src/OldComp.tsx"}
 - List directory: {"tool": "listDirectory", "path": "src"}
 - Run terminal: {"tool": "runBashCommand", "command": "npm install @remotion/media"}
@@ -1654,8 +1744,10 @@ SELECTED ELEMENT IN REMOTION PREVIEW:
 - Element Name: "${context.selectedClip.name}"
 - Element Slug: "${context.selectedClip.elementSlug || 'custom'}"
 - Clip ID: "${context.selectedClip.id}"
+- Element File (fork, editable): "${(context.selectedClip as any).elementFile || '(belum di-fork — panggil forkElementComponent jika butuh edit kode)'}"
 - Active Props: ${JSON.stringify(context.selectedClip.elementProps || context.selectedClip.props || {})}
-NOTE: The user currently has this specific element selected in the preview. If their request refers to "elemen ini", "komponen ini", "warnanya", "teksnya", "kecepatannya", or similar edits, apply the requested changes directly to this element's props or elementProps in timeline.json!`
+NOTE: The user currently has this specific element selected in the preview. If their request refers to "elemen ini", "komponen ini", "warnanya", "teksnya", "kecepatannya", or similar edits, apply the requested changes directly to this element's props or elementProps in timeline.json! If the request needs NEW structure/animation not covered by propsSchema, edit the elementFile (fork) instead.
+`
     : ''
 }
 
@@ -1950,7 +2042,14 @@ User request:
       // tanpa write/modify/render, panggil AI lagi dengan hasil baca untuk diinterpretasikan.
       try {
         const firstRoundTools = (timelineChanges?.toolCalls || []).map((tc: any) => tc.tool);
-        const hasWriteOrModify = firstRoundTools.some((t) => t === 'writeFile' || t === 'modifyTimeline' || t === 'renderVideo');
+        const hasWriteOrModify = firstRoundTools.some(
+          (t) =>
+            t === 'writeFile' ||
+            t === 'modifyTimeline' ||
+            t === 'renderVideo' ||
+            t === 'forkElementComponent' ||
+            t === 'deleteFile'
+        );
         const hasReadOnly = firstRoundTools.length > 0 && !hasWriteOrModify;
 
         if (hasReadOnly && editingMode) {
@@ -2309,14 +2408,49 @@ app.put('/api/files/:filename', (req, res) => {
   }
 
   try {
+    // Fork-on-insert bersifat idempotent: jangan timpa file yang sudah ada
+    // (bisa jadi sudah diedit AI) kecuali memang diminta overwrite.
+    const ifMissing = req.query.ifMissing === '1' || req.query.ifMissing === 'true';
+    if (ifMissing && fs.existsSync(target)) {
+      const existing = fs.readFileSync(target, 'utf-8');
+      return res.json({ success: true, skipped: true, filename, content: existing });
+    }
+
+    const dir = path.dirname(target);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+
     fs.writeFileSync(target, content, 'utf-8');
     if (filename === 'timeline.json') {
       try {
         const parsed = JSON.parse(content);
         broadcastSSE('file_changed', { file: 'timeline.json', timeline: parsed });
       } catch {}
+    } else {
+      // File komponen/workspace lain (mis. src/components/*.element.tsx):
+      // beri tahu frontend agar WorkspaceElement reload preview.
+      broadcastSSE('file_changed', { file: filename, updated: true });
     }
     res.json({ success: true, filename });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/files/:filename — baca satu file dari project aktif
+app.get('/api/files/:filename', (req, res) => {
+  const filename = req.params.filename;
+  if (filename.includes('..')) {
+    return res.status(403).json({ error: 'Path traversal forbidden' });
+  }
+  const target = path.join(ACTIVE_PROJECT_DIR, filename);
+  if (!fs.existsSync(target) || !fs.statSync(target).isFile()) {
+    return res.status(404).json({ error: `File not found: ${filename}` });
+  }
+  try {
+    const content = fs.readFileSync(target, 'utf-8');
+    res.json({ filename, content });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

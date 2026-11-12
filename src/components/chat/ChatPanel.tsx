@@ -107,7 +107,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   const [attachments, setAttachments] = useState<AgentAttachment[]>([]);
   const [expandedTools, setExpandedTools] = useState<Record<string, boolean>>({});
   const [isMultiLine, setIsMultiLine] = useState(false);
-  const [isToolPanelCollapsed, setIsToolPanelCollapsed] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);

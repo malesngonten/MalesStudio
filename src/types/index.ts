@@ -11,6 +11,9 @@ export interface TimelineClip {
   name: string;
   assetId?: string;
   elementSlug?: string;
+  /** Path file komponen fork di workspace proyek (mis. 'achievement-pop.element.tsx').
+   *  Jika ada, preview memuat kode dari file ini (bisa diedit AI), fallback ke registry. */
+  elementFile?: string;
   elementProps?: Record<string, any>;
   props?: {
     text?: string;

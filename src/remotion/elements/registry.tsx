@@ -140,6 +140,7 @@ export const BUILTIN_ELEMENTS: RemotionElementDefinition[] = (remocnCatalogRaw a
     dependencies: item.dependencies || [{ name: 'remotion', version: null }],
     initialProps: item.initialProps || {},
     propsSchema: item.propsSchema || [],
+    sourceCode: item.sourceCode || '',
     component: SafeComponent,
     lazyComponent,
     previewBackdrop: item.previewBackdrop,
@@ -377,6 +378,10 @@ export function createElementTimelineClip(
     from: fromFrame,
     duration: element.durationInFrames,
     elementSlug: element.slug,
+    // Fork-on-insert: clip menunjuk ke salinan source di workspace proyek.
+    // File dibuat oleh App saat insert (lihat handleForkElementToWorkspace).
+    // Jika file gagal dimuat, preview fallback ke komponen registry.
+    elementFile: element.sourceCode ? `src/components/${element.slug}.element.tsx` : undefined,
     elementProps: {
       ...element.initialProps,
       ...customProps,

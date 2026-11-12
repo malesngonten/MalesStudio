@@ -313,6 +313,14 @@ export function useStudioState() {
     studioAgentClient.onFileChanged((file, newTimeline) => {
       if (file === 'timeline.json' && newTimeline) {
         setTimeline(newTimeline);
+        return;
+      }
+      // File komponen/workspace lain berubah (mis. forked element .tsx):
+      // beri tahu WorkspaceElement agar invalidate cache & remount preview.
+      if (file) {
+        window.dispatchEvent(
+          new CustomEvent('workspace-file-changed', { detail: { file } })
+        );
       }
     });
 
@@ -527,6 +535,7 @@ export function useStudioState() {
           selectedClipName: selectedClip?.name || undefined,
           selectedClipType: selectedClip?.elementSlug ? 'element' : selectedLayer?.type || undefined,
           selectedClipElementSlug: selectedClip?.elementSlug || undefined,
+          selectedClipElementFile: selectedClip?.elementFile || undefined,
           selectedClipProps: selectedClip?.elementProps || selectedClip?.props || undefined,
         },
       };

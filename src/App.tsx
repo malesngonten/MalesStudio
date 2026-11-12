@@ -23,6 +23,7 @@ import { ElementLibrarySheet } from './components/elements/ElementLibrarySheet';
 import {
   getInstalledElementSlugs,
   saveInstalledElementSlugs,
+  getElementBySlug,
 } from './remotion/elements/registry';
 import { RemotionElementDefinition, ElementCategory } from './remotion/elements/types';
 import {
@@ -235,28 +236,53 @@ export default function App() {
   // Periodically save timeline & filesState to localStorage
   useAutoSaveWorkspace(timeline, filesState, 5000);
 
+  // Fork source komponen library ke workspace proyek (src/components/<slug>.element.tsx).
+  // File inilah yang dibaca WorkspaceElement di preview dan boleh diedit AI.
+  const forkElementToWorkspace = useCallback(
+    (element: RemotionElementDefinition): string | undefined => {
+      if (!element.sourceCode) return undefined;
+      const fileName = `src/components/${element.slug}.element.tsx`;
+
+      setFilesState((prev) => {
+        if (prev[fileName] !== undefined) return prev;
+        return { ...prev, [fileName]: element.sourceCode };
+      });
+
+      // ifMissing=1 → jangan timpa fork yang sudah diedit AI
+      fetch(`/api/files/${encodeURIComponent(fileName)}?ifMissing=1`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: element.sourceCode }),
+      })
+        .then((res) => res.json())
+        .then((data) => {
+          // Sinkronkan isi file yang sudah ada (mis. hasil edit AI) ke editor
+          if (data?.content && typeof data.content === 'string') {
+            setFilesState((prev) =>
+              prev[fileName] === data.content ? prev : { ...prev, [fileName]: data.content }
+            );
+          }
+        })
+        .catch(() => {});
+
+      return fileName;
+    },
+    []
+  );
+
   // Install Element TSX to workspace files & persist
   const handleInstallElementToWorkspace = useCallback(
     (element: RemotionElementDefinition) => {
-      const fileName = `${element.slug}.element.tsx`;
-      setFilesState((prev) => ({
-        ...prev,
-        [fileName]: element.sourceCode,
-      }));
+      forkElementToWorkspace(element);
       setInstalledElementSlugs((prev) => {
         if (prev.includes(element.slug)) return prev;
         const updated = [...prev, element.slug];
         saveInstalledElementSlugs(updated);
         return updated;
       });
-      fetch(`/api/files/${encodeURIComponent(fileName)}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: element.sourceCode }),
-      }).catch(() => {});
       showToast(`Komponen "${element.displayName}" berhasil dipasang ke proyek Remotion!`);
     },
-    [showToast]
+    [forkElementToWorkspace, showToast]
   );
 
   // Play/pause toggle
@@ -669,6 +695,11 @@ export default function App() {
           <ElementLibrarySheet
             timeline={timeline}
             onInsertElementToTimeline={(clip, layerName) => {
+              // Fork komponen ke workspace agar bisa dibaca/diedit AI
+              if (clip.elementSlug) {
+                const el = getElementBySlug(clip.elementSlug);
+                if (el) forkElementToWorkspace(el);
+              }
               handleInsertTimelineClip(clip, layerName);
               setIsElementSheetOpen(false);
             }}

@@ -4,5 +4,6 @@ dist/
 coverage/
 .DS_Store
 *.log
+.ai_usage.json
 .env*
 !.env.example

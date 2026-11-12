@@ -2,6 +2,7 @@ import React from 'react';
 import { AbsoluteFill, useCurrentFrame, useVideoConfig, interpolate, spring } from 'remotion';
 import { TimelineData, TimelineClip } from '../types';
 import { getAllElements, createUserComponent } from './elements/registry';
+import { WorkspaceElement } from './WorkspaceElement';
 
 interface ShortVideoCompositionProps {
   timeline: TimelineData;
@@ -154,6 +155,32 @@ export const ShortVideoComposition: React.FC<ShortVideoCompositionProps> = ({ ti
       {activeElementClips.map((clip) => {
         const all = getAllElements();
         const def = all.find((el) => el.slug === clip.elementSlug);
+
+        const mergedProps = {
+          ...(def?.initialProps || {}),
+          ...(clip.elementProps || clip.props || {}),
+        };
+
+        // Fork komponen (editable React code) → load dari workspace proyek.
+        // Fallback ke komponen registry jika file fork belum ada / gagal compile.
+        if (clip.elementFile) {
+          const FallbackComponent =
+            def && def.component && typeof def.component === 'function'
+              ? def.component
+              : undefined;
+
+          return (
+            <AbsoluteFill key={clip.id} className="pointer-events-none select-none">
+              <WorkspaceElement
+                elementFile={clip.elementFile}
+                props={mergedProps}
+                fallback={FallbackComponent}
+                fallbackProps={mergedProps}
+              />
+            </AbsoluteFill>
+          );
+        }
+
         if (!def) return null;
         const ElementComponent =
           def.component && typeof def.component === 'function'
@@ -161,11 +188,6 @@ export const ShortVideoComposition: React.FC<ShortVideoCompositionProps> = ({ ti
             : createUserComponent(def.initialProps || {}, 'spring');
 
         if (!ElementComponent || typeof ElementComponent !== 'function') return null;
-
-        const mergedProps = {
-          ...def.initialProps,
-          ...(clip.elementProps || clip.props || {}),
-        };
 
         return (
           <AbsoluteFill key={clip.id} className="pointer-events-none select-none">
