@@ -2660,6 +2660,8 @@ User request:
         // summary atau deskripsi ramah dari tool yang dijalankan.
         let displayText = aiRawResponse;
         let parsedOk = false;
+        // Status apakah respons AI terpotong token SEBELUM kita coba parse
+        const wasTruncated = aiFinishReason === 'length';
         try {
           const normalized = normalizeAIResponse(parseAIJson(aiRawResponse));
           parsedOk = true;
@@ -2691,7 +2693,8 @@ User request:
 
         // Jangan pernah tampilkan JSON mentah ke user
         const trimmedRaw = aiRawResponse.trim();
-        if (!parsedOk && aiFinishReason === 'length') {
+        // Jika AI sebenarnya terpotong token, tampilkan pesan khusus terlepas dari parsedOk
+        if (wasTruncated) {
           displayText =
             'Respons AI terpotong karena batas token (finish_reason: length). Coba model dengan context/output lebih besar, atau minta perubahan yang lebih kecil.';
         } else if (!parsedOk && (trimmedRaw.startsWith('{') || trimmedRaw.startsWith('['))) {
