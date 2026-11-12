@@ -1561,11 +1561,31 @@ app.post('/api/agent/prompt', async (req, res) => {
       let multiTurnHandled = false; // tandai kalau multi-turn loop sudah menangani respons
 
       // Helper: broadcast an AI text chunk to SSE clients in real time
+      // Jika respons ternyata JSON edit-mode (diawali '{' atau ```json),
+      // jangan streaming mentah ke chat — cukup indikator "menyusun rencana".
+      let streamBuffer = '';
+      let streamModeDecided = false;
+      let suppressStream = false;
       const streamAiChunk = (chunk: string) => {
         aiRawResponse += chunk;
         aiMessage.content = aiRawResponse;
         aiMessage.text = aiRawResponse;
-        broadcastSSE('text_chunk', { messageId: aiMsgId, chunk, accumulated: aiRawResponse });
+        streamBuffer += chunk;
+
+        if (!streamModeDecided) {
+          const trimmed = streamBuffer.replace(/^```json/i, '').trimStart();
+          if (trimmed.length > 0) {
+            streamModeDecided = true;
+            if (trimmed.startsWith('{')) {
+              suppressStream = true;
+              broadcastSSE('agent_status', { status: 'thinking', note: 'AI sedang menyusun rencana perubahan...' });
+            }
+          }
+        }
+
+        if (!suppressStream) {
+          broadcastSSE('text_chunk', { messageId: aiMsgId, chunk, accumulated: aiRawResponse });
+        }
       };
 
       // Dual-mode system prompt:
@@ -2152,6 +2172,9 @@ User request:
           const parsed = JSON.parse(cleaned);
           if (parsed && typeof parsed.summary === 'string' && parsed.summary.trim()) {
             displayText = parsed.summary.trim();
+          } else if (parsed && Array.isArray(parsed.toolCalls) && parsed.toolCalls.length > 0) {
+            const toolNames = parsed.toolCalls.map((tc: any) => tc.tool).join(', ');
+            displayText = `Menyiapkan perubahan: ${toolNames}`;
           }
         } catch {
           // Bukan JSON — tampilkan respons apa adanya (chat mode)
