@@ -1383,6 +1383,69 @@ function normalizeAIResponse(parsed: any): NormalizedAIResponse | null {
   return out;
 }
 
+// Ekstrak JSON dari respons model yang mungkin mengandung teks pembuka/penutup
+// atau code fence. Mengembalikan null jika tidak ada JSON valid.
+function parseAIJson(raw: string): any | null {
+  if (!raw || typeof raw !== 'string') return null;
+  const text = raw.trim();
+  if (!text) return null;
+
+  const stripFences = (value: string) =>
+    value
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```$/i, '')
+      .trim();
+
+  const direct = stripFences(text);
+  try {
+    return JSON.parse(direct);
+  } catch {}
+
+  // Model kadang menulis kalimat sebelum/sesudah JSON. Ambil blok
+  // object/array pertama yang seimbang, dengan menghormati string escape.
+  const startCandidates = [text.indexOf('{'), text.indexOf('[')]
+    .filter((index) => index >= 0)
+    .sort((a, b) => a - b);
+
+  for (const start of startCandidates) {
+    const open = text[start];
+    const close = open === '{' ? '}' : ']';
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+
+    for (let i = start; i < text.length; i++) {
+      const ch = text[i];
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (ch === '\\') {
+          escaped = true;
+        } else if (ch === '"') {
+          inString = false;
+        }
+        continue;
+      }
+      if (ch === '"') {
+        inString = true;
+      } else if (ch === open) {
+        depth++;
+      } else if (ch === close) {
+        depth--;
+        if (depth === 0) {
+          try {
+            return JSON.parse(text.slice(start, i + 1));
+          } catch {
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
 function friendlyToolSummary(toolCalls: any[]): string {
   const parts = toolCalls.map((tc) => {
     const p = tc.path || tc.file || '';
@@ -1391,6 +1454,8 @@ function friendlyToolSummary(toolCalls: any[]): string {
         return p ? `Membaca \`${p}\`` : 'Membaca file';
       case 'writeFile':
         return p ? `Menulis \`${p}\`` : 'Menulis file';
+      case 'editFile':
+        return p ? `Mengedit \`${p}\`` : 'Mengedit file';
       case 'listDirectory':
         return `Melihat isi folder \`${p || '.'}\``;
       case 'modifyTimeline':
@@ -2186,14 +2251,9 @@ User request:
               });
             } catch {}
 
-            // Try to parse as JSON for EDIT mode
-            try {
-              const cleaned = aiRawResponse
-                .replace(/^```json/im, '')
-                .replace(/^```/im, '')
-                .replace(/```$/m, '')
-                .trim();
-              const parsed = JSON.parse(cleaned);
+            // Try to parse as JSON for EDIT mode (toleran teks/fence di sekitar JSON)
+            const parsed = parseAIJson(aiRawResponse);
+            if (parsed) {
               const normalized = normalizeAIResponse(parsed);
               if (normalized?.timeline) {
                 editingMode = true;
@@ -2202,8 +2262,6 @@ User request:
                 editingMode = true;
                 timelineChanges = normalized;
               }
-            } catch {
-              // Not JSON - that's fine, it's CHAT mode
             }
           } else {
             let errText = '';
@@ -2257,14 +2315,9 @@ User request:
             });
           } catch {}
 
-          // Try to parse as JSON for EDIT mode
-          try {
-            const cleaned = aiRawResponse
-              .replace(/^```json/im, '')
-              .replace(/^```/im, '')
-              .replace(/```$/m, '')
-              .trim();
-            const parsed = JSON.parse(cleaned);
+          // Try to parse as JSON for EDIT mode (toleran teks/fence di sekitar JSON)
+          const parsed = parseAIJson(aiRawResponse);
+          if (parsed) {
             const normalized = normalizeAIResponse(parsed);
             if (normalized?.timeline) {
               editingMode = true;
@@ -2273,8 +2326,6 @@ User request:
               editingMode = true;
               timelineChanges = normalized;
             }
-          } catch {
-            // Not JSON - CHAT mode
           }
         } catch (geminiErr: any) {
           providerError = `Gemini API Error: ${geminiErr?.message || geminiErr}`;
@@ -2461,7 +2512,7 @@ User request:
 
             // Kalau masih JSON dengan toolCalls, eksekusi lanjutan
             try {
-              const parsed = JSON.parse(cleaned);
+              const parsed = parseAIJson(cleaned);
               const normalized = normalizeAIResponse(parsed);
               if (normalized?.toolCalls?.length) {
                 for (const tc of normalized.toolCalls) {
@@ -2610,20 +2661,21 @@ User request:
         let displayText = aiRawResponse;
         let parsedOk = false;
         try {
-          const cleaned = aiRawResponse
-            .replace(/^```json/im, '')
-            .replace(/^```/im, '')
-            .replace(/```$/m, '')
-            .trim();
-          const parsed = JSON.parse(cleaned);
+          const normalized = normalizeAIResponse(parseAIJson(aiRawResponse));
           parsedOk = true;
-          const normalized = normalizeAIResponse(parsed);
+          // Hanya tampilkan ringkasan jika AI benar-benar mengirim JSON yang valid
+          // dengan summary, timeline, atau toolCalls yang dipahami.
           if (normalized?.summary) {
             displayText = normalized.summary;
           } else if (normalized?.timeline) {
             displayText = 'Timeline video berhasil diperbarui.';
           } else if (normalized?.toolCalls?.length) {
             displayText = friendlyToolSummary(normalized.toolCalls);
+          } else {
+            // AI tidak mengirim JSON yang dikenali (tanpa summary/timeline/toolCalls)
+            // tampilkan pesan biasa, jangan tampilkan respons mentah
+            displayText = 'AI mengirim respons yang tidak valid. Coba kirim ulang prompt.';
+            parsedOk = false; // agar pengecekan di bawah bisa bekerja
           }
         } catch {
           // Bukan JSON — chat mode, tampilkan apa adanya
