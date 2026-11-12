@@ -1122,22 +1122,48 @@ async function executeTool(toolCall: any): Promise<any> {
         }
         const fileContent = fs.readFileSync(targetPath, 'utf-8');
 
-        // Link clip di timeline ke file fork (jika layerId & clipId diberikan)
+        // Link clip di timeline ke file fork.
+        // Prioritaskan layerId+clipId; fallback: cari clipId; fallback terakhir:
+        // jika hanya ada SATU clip dengan elementSlug tersebut, tautkan otomatis.
         let updatedTimeline: any = null;
-        if (toolCall.layerId && toolCall.clipId) {
+        try {
           const timelineData = JSON.parse(fs.readFileSync(timelinePath, 'utf-8'));
-          const layer = timelineData.layers?.find((l: any) => l.id === toolCall.layerId);
-          if (!layer) {
-            return { error: `Layer ${toolCall.layerId} tidak ditemukan` };
+          let targetLayer: any = null;
+          let targetClip: any = null;
+
+          if (toolCall.layerId && toolCall.clipId) {
+            targetLayer = timelineData.layers?.find((l: any) => l.id === toolCall.layerId);
+            targetClip = targetLayer?.clips?.find((c: any) => c.id === toolCall.clipId);
+          } else if (toolCall.clipId) {
+            for (const layer of timelineData.layers || []) {
+              const c = layer.clips?.find((x: any) => x.id === toolCall.clipId);
+              if (c) {
+                targetLayer = layer;
+                targetClip = c;
+                break;
+              }
+            }
+          } else {
+            const matches: Array<{ layer: any; clip: any }> = [];
+            for (const layer of timelineData.layers || []) {
+              for (const c of layer.clips || []) {
+                if (c.elementSlug === slug) matches.push({ layer, clip: c });
+              }
+            }
+            if (matches.length === 1) {
+              targetLayer = matches[0].layer;
+              targetClip = matches[0].clip;
+            }
           }
-          const clip = layer.clips?.find((c: any) => c.id === toolCall.clipId);
-          if (!clip) {
-            return { error: `Clip ${toolCall.clipId} tidak ditemukan di layer ${toolCall.layerId}` };
+
+          if (targetClip) {
+            targetClip.elementFile = relPath;
+            fs.writeFileSync(timelinePath, JSON.stringify(timelineData, null, 2), 'utf-8');
+            broadcastSSE('file_changed', { file: 'timeline.json', timeline: timelineData });
+            updatedTimeline = timelineData;
           }
-          clip.elementFile = relPath;
-          fs.writeFileSync(timelinePath, JSON.stringify(timelineData, null, 2), 'utf-8');
-          broadcastSSE('file_changed', { file: 'timeline.json', timeline: timelineData });
-          updatedTimeline = timelineData;
+        } catch (linkErr: any) {
+          console.error('[forkElementComponent] auto-link gagal:', linkErr?.message || linkErr);
         }
 
         broadcastSSE('file_changed', { file: relPath, updated: true });
@@ -1147,7 +1173,7 @@ async function executeTool(toolCall: any): Promise<any> {
           path: relPath,
           bytes: fileContent.length,
           alreadyExisted: alreadyExists,
-          linkedClip: Boolean(toolCall.layerId && toolCall.clipId),
+          linkedClip: Boolean(updatedTimeline),
           timeline: updatedTimeline || undefined,
           note: 'File fork siap diedit dengan writeFile. Preview studio memuat file ini via clip.elementFile.',
         };
