@@ -98,246 +98,246 @@ export function useDropdownPosition(
 
   const rafRef = useRef<number>(0);
   const lastTriggerRectRef = useRef<DOMRect | null>(null);
+  const calculatePositionRef = useRef<() => void>(() => {});
 
-  const calculatePosition = useCallback(() => {
-    try {
-      const trigger = triggerRef.current;
-      const menu = menuRef.current;
-      // Additional safety check: ensure menu is actually in the DOM
-      if (!trigger || !menu || !document.body.contains(menu)) return;
+  // Stable calculatePosition via ref to avoid infinite loop
+  useEffect(() => {
+    calculatePositionRef.current = () => {
+      try {
+        const trigger = triggerRef.current;
+        const menu = menuRef.current;
+        // Additional safety check: ensure menu is actually in the DOM
+        if (!trigger || !menu || !document.body.contains(menu)) return;
 
-    const boundary = boundaryElement || window;
-    const boundaryRect = boundary === window
-      ? { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight }
-      : boundary.getBoundingClientRect();
+        const boundary = boundaryElement || window;
+        const boundaryRect = boundary === window
+          ? { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight }
+          : boundary.getBoundingClientRect();
 
-    const triggerRect = trigger.getBoundingClientRect();
-    const menuRect = menu.getBoundingClientRect();
+        const triggerRect = trigger.getBoundingClientRect();
+        const menuRect = menu.getBoundingClientRect();
 
-    // Skip if trigger position hasn't changed (optimization)
-    if (lastTriggerRectRef.current &&
-        lastTriggerRectRef.current.top === triggerRect.top &&
-        lastTriggerRectRef.current.left === triggerRect.left &&
-        lastTriggerRectRef.current.width === triggerRect.width &&
-        lastTriggerRectRef.current.height === triggerRect.height) {
-      return;
-    }
-    lastTriggerRectRef.current = triggerRect;
-
-    const mWidth = menuWidth || menuRect.width || 0;
-    const mHeight = menuHeight || menuRect.height || 0;
-
-    // If menu hasn't rendered yet, use fallback
-    if (mWidth === 0 || mHeight === 0) {
-      if (useAbsolutePosition && anchorElement) {
-        const anchorRect = anchorElement.getBoundingClientRect();
-        setStyle({
-          position: 'absolute',
-          top: `${triggerRect.bottom - anchorRect.top + offset}px`,
-          left: `${triggerRect.left - anchorRect.left}px`,
-          zIndex: 50,
-        });
-      } else {
-        setStyle({
-          position: 'fixed',
-          top: `${triggerRect.bottom + offset}px`,
-          left: `${triggerRect.left}px`,
-          zIndex: 50,
-        });
-      }
-      return;
-    }
-
-    // Test each preferred position
-    for (const pos of preferredPositions) {
-      for (const align of preferredAlignments) {
-        let top = 0;
-        let left = 0;
-
-        switch (pos) {
-          case 'bottom':
-            top = triggerRect.bottom + offset;
-            break;
-          case 'top':
-            top = triggerRect.top - mHeight - offset;
-            break;
-          case 'left':
-            left = triggerRect.left - mWidth - offset;
-            break;
-          case 'right':
-            left = triggerRect.right + offset;
-            break;
-        }
-
-        switch (align) {
-          case 'start':
-            if (pos === 'bottom' || pos === 'top') left = triggerRect.left;
-            else top = triggerRect.top;
-            break;
-          case 'center':
-            if (pos === 'bottom' || pos === 'top') left = triggerRect.left + triggerRect.width / 2 - mWidth / 2;
-            else top = triggerRect.top + triggerRect.height / 2 - mHeight / 2;
-            break;
-          case 'end':
-            if (pos === 'bottom' || pos === 'top') left = triggerRect.right - mWidth;
-            else top = triggerRect.top + triggerRect.height - mHeight;
-            break;
-        }
-
-        const fitsHorizontal =
-          left >= boundaryRect.left + viewportGap &&
-          left + mWidth <= boundaryRect.right - viewportGap;
-        const fitsVertical =
-          top >= boundaryRect.top + viewportGap &&
-          top + mHeight <= boundaryRect.bottom - viewportGap;
-
-        if (fitsHorizontal && fitsVertical) {
-          const positionStyle = useAbsolutePosition && anchorElement
-            ? (() => {
-                const anchorRect = anchorElement.getBoundingClientRect();
-                return {
-                  position: 'absolute' as const,
-                  top: `${top - anchorRect.top}px`,
-                  left: `${left - anchorRect.left}px`,
-                  zIndex: 50,
-                };
-              })()
-            : {
-              position: 'fixed' as const,
-              top: `${top}px`,
-              left: `${left}px`,
-              zIndex: 50,
-            };
-
-          setStyle(positionStyle);
-          setPosition(pos);
-          setAlignment(align);
-          setIsFlipped(pos !== preferredPositions[0]);
-          setIsShifted(align !== preferredAlignments[0]);
+        // Skip if trigger position hasn't changed (optimization)
+        if (lastTriggerRectRef.current &&
+            lastTriggerRectRef.current.top === triggerRect.top &&
+            lastTriggerRectRef.current.left === triggerRect.left &&
+            lastTriggerRectRef.current.width === triggerRect.width &&
+            lastTriggerRectRef.current.height === triggerRect.height) {
           return;
         }
-      }
-    }
+        lastTriggerRectRef.current = triggerRect;
 
-    // No perfect fit - try with flip/shift
-    if (flip || shift) {
-      for (const pos of ['bottom', 'top', 'left', 'right']) {
-        for (const align of ['start', 'center', 'end']) {
-          let top = 0;
-          let left = 0;
+        const mWidth = menuWidth || menuRect.width || 0;
+        const mHeight = menuHeight || menuRect.height || 0;
 
-          switch (pos) {
-            case 'bottom': top = triggerRect.bottom + offset; break;
-            case 'top': top = triggerRect.top - mHeight - offset; break;
-            case 'left': left = triggerRect.left - mWidth - offset; break;
-            case 'right': left = triggerRect.right + offset; break;
+        // If menu hasn't rendered yet, use fallback
+        if (mWidth === 0 || mHeight === 0) {
+          if (useAbsolutePosition && anchorElement) {
+            const anchorRect = anchorElement.getBoundingClientRect();
+            setStyle({
+              position: 'absolute',
+              top: `${triggerRect.bottom - anchorRect.top + offset}px`,
+              left: `${triggerRect.left - anchorRect.left}px`,
+              zIndex: 50,
+            });
+          } else {
+            setStyle({
+              position: 'fixed',
+              top: `${triggerRect.bottom + offset}px`,
+              left: `${triggerRect.left}px`,
+              zIndex: 50,
+            });
           }
+          // Test each preferred position
+        for (const pos of preferredPositions) {
+          for (const align of preferredAlignments) {
+            let top = 0;
+            let left = 0;
 
-          switch (align) {
-            case 'start':
-              if (pos === 'bottom' || pos === 'top') left = triggerRect.left;
-              else top = triggerRect.top;
-              break;
-            case 'center':
-              if (pos === 'bottom' || pos === 'top') left = triggerRect.left + triggerRect.width / 2 - mWidth / 2;
-              else top = triggerRect.top + triggerRect.height / 2 - mHeight / 2;
-              break;
-            case 'end':
-              if (pos === 'bottom' || pos === 'top') left = triggerRect.right - mWidth;
-              else top = triggerRect.top + triggerRect.height - mHeight;
-              break;
-          }
+            switch (pos) {
+              case 'bottom':
+                top = triggerRect.bottom + offset;
+                break;
+              case 'top':
+                top = triggerRect.top - mHeight - offset;
+                break;
+              case 'left':
+                left = triggerRect.left - mWidth - offset;
+                break;
+              case 'right':
+                left = triggerRect.right + offset;
+                break;
+            }
 
-          let finalLeft = left;
-          let finalTop = top;
+            switch (align) {
+              case 'start':
+                if (pos === 'bottom' || pos === 'top') left = triggerRect.left;
+                else top = triggerRect.top;
+                break;
+              case 'center':
+                if (pos === 'bottom' || pos === 'top') left = triggerRect.left + triggerRect.width / 2 - mWidth / 2;
+                else top = triggerRect.top + triggerRect.height / 2 - mHeight / 2;
+                break;
+              case 'end':
+                if (pos === 'bottom' || pos === 'top') left = triggerRect.right - mWidth;
+                else top = triggerRect.top + triggerRect.height - mHeight;
+                break;
+            }
 
-          if (shift) {
-            if (finalLeft < boundaryRect.left + viewportGap) finalLeft = boundaryRect.left + viewportGap;
-            else if (finalLeft + mWidth > boundaryRect.right - viewportGap) finalLeft = boundaryRect.right - viewportGap - mWidth;
-            if (finalTop < boundaryRect.top + viewportGap) finalTop = boundaryRect.top + viewportGap;
-            else if (finalTop + mHeight > boundaryRect.bottom - viewportGap) finalTop = boundaryRect.bottom - viewportGap - mHeight;
-          }
+            const fitsHorizontal =
+              left >= boundaryRect.left + viewportGap &&
+              left + mWidth <= boundaryRect.right - viewportGap;
+            const fitsVertical =
+              top >= boundaryRect.top + viewportGap &&
+              top + mHeight <= boundaryRect.bottom - viewportGap;
 
-          if (flip) {
-            if (pos === 'bottom' && finalTop + mHeight > boundaryRect.bottom - viewportGap) finalTop = triggerRect.top - mHeight - offset;
-            else if (pos === 'top' && finalTop < boundaryRect.top + viewportGap) finalTop = triggerRect.bottom + offset;
-            if (pos === 'right' && finalLeft + mWidth > boundaryRect.right - viewportGap) finalLeft = triggerRect.left - mWidth - offset;
-            else if (pos === 'left' && finalLeft < boundaryRect.left + viewportGap) finalLeft = triggerRect.right + offset;
-          }
+            if (fitsHorizontal && fitsVertical) {
+              const positionStyle = useAbsolutePosition && anchorElement
+                ? (() => {
+                    const anchorRect = anchorElement.getBoundingClientRect();
+                    return {
+                      position: 'absolute' as const,
+                      top: `${top - anchorRect.top}px`,
+                      left: `${left - anchorRect.left}px`,
+                      zIndex: 50,
+                    };
+                  })()
+                : {
+                  position: 'fixed' as const,
+                  top: `${top}px`,
+                  left: `${left}px`,
+                  zIndex: 50,
+                };
 
-          const fitsHorizontal =
-            finalLeft >= boundaryRect.left + viewportGap &&
-            finalLeft + mWidth <= boundaryRect.right - viewportGap;
-          const fitsVertical =
-            finalTop >= boundaryRect.top + viewportGap &&
-            finalTop + mHeight <= boundaryRect.bottom - viewportGap;
-
-          if (fitsHorizontal && fitsVertical) {
-            const positionStyle = useAbsolutePosition && anchorElement
-              ? (() => {
-                  const anchorRect = anchorElement.getBoundingClientRect();
-                  return {
-                    position: 'absolute' as const,
-                    top: `${finalTop - anchorRect.top}px`,
-                    left: `${finalLeft - anchorRect.left}px`,
-                    zIndex: 50,
-                  };
-                })()
-              : {
-                position: 'fixed' as const,
-                top: `${finalTop}px`,
-                left: `${finalLeft}px`,
-                zIndex: 50,
-              };
-
-            setStyle(positionStyle);
-            setPosition(pos);
-            setAlignment(align);
-            setIsFlipped(pos !== preferredPositions[0]);
-            setIsShifted(align !== preferredAlignments[0]);
-            return;
+              setStyle(positionStyle);
+              setPosition(pos);
+              setAlignment(align);
+              setIsFlipped(pos !== preferredPositions[0]);
+              setIsShifted(align !== preferredAlignments[0]);
+              return;
+            }
           }
         }
-      }
-    }
 
-    // Fallback: center of viewport
-    const fallbackStyle = useAbsolutePosition && anchorElement
-      ? (() => {
-          const anchorRect = anchorElement.getBoundingClientRect();
-          return {
-            position: 'absolute' as const,
-            top: `${(boundaryRect.height - mHeight) / 2 - anchorRect.top}px`,
-            left: `${(boundaryRect.width - mWidth) / 2 - anchorRect.left}px`,
+        // No perfect fit - try with flip/shift
+        if (flip || shift) {
+          for (const pos of ['bottom', 'top', 'left', 'right']) {
+            for (const align of ['start', 'center', 'end']) {
+              let top = 0;
+              let left = 0;
+
+              switch (pos) {
+                case 'bottom': top = triggerRect.bottom + offset; break;
+                case 'top': top = triggerRect.top - mHeight - offset; break;
+                case 'left': left = triggerRect.left - mWidth - offset; break;
+                case 'right': left = triggerRect.right + offset; break;
+              }
+
+              switch (align) {
+                case 'start':
+                  if (pos === 'bottom' || pos === 'top') left = triggerRect.left;
+                  else top = triggerRect.top;
+                  break;
+                case 'center':
+                  if (pos === 'bottom' || pos === 'top') left = triggerRect.left + triggerRect.width / 2 - mWidth / 2;
+                  else top = triggerRect.top + triggerRect.height / 2 - mHeight / 2;
+                  break;
+                case 'end':
+                  if (pos === 'bottom' || pos === 'top') left = triggerRect.right - mWidth;
+                  else top = triggerRect.top + triggerRect.height - mHeight;
+                  break;
+              }
+
+              let finalLeft = left;
+              let finalTop = top;
+
+              if (shift) {
+                if (finalLeft < boundaryRect.left + viewportGap) finalLeft = boundaryRect.left + viewportGap;
+                else if (finalLeft + mWidth > boundaryRect.right - viewportGap) finalLeft = boundaryRect.right - viewportGap - mWidth;
+                if (finalTop < boundaryRect.top + viewportGap) finalTop = boundaryRect.top + viewportGap;
+                else if (finalTop + mHeight > boundaryRect.bottom - viewportGap) finalTop = boundaryRect.bottom - viewportGap - mHeight;
+              }
+
+              if (flip) {
+                if (pos === 'bottom' && finalTop + mHeight > boundaryRect.bottom - viewportGap) finalTop = triggerRect.top - mHeight - offset;
+                else if (pos === 'top' && finalTop < boundaryRect.top + viewportGap) finalTop = triggerRect.bottom + offset;
+                if (pos === 'right' && finalLeft + mWidth > boundaryRect.right - viewportGap) finalLeft = triggerRect.left - mWidth - offset;
+                else if (pos === 'left' && finalLeft < boundaryRect.left + viewportGap) finalLeft = triggerRect.right + offset;
+              }
+
+              const fitsHorizontal =
+                finalLeft >= boundaryRect.left + viewportGap &&
+                finalLeft + mWidth <= boundaryRect.right - viewportGap;
+              const fitsVertical =
+                finalTop >= boundaryRect.top + viewportGap &&
+                finalTop + mHeight <= boundaryRect.bottom - viewportGap;
+
+              if (fitsHorizontal && fitsVertical) {
+                const positionStyle = useAbsolutePosition && anchorElement
+                  ? (() => {
+                      const anchorRect = anchorElement.getBoundingClientRect();
+                      return {
+                        position: 'absolute' as const,
+                        top: `${finalTop - anchorRect.top}px`,
+                        left: `${finalLeft - anchorRect.left}px`,
+                        zIndex: 50,
+                      };
+                    })()
+                  : {
+                    position: 'fixed' as const,
+                    top: `${finalTop}px`,
+                    left: `${finalLeft}px`,
+                    zIndex: 50,
+                  };
+
+                setStyle(positionStyle);
+                setPosition(pos);
+                setAlignment(align);
+                setIsFlipped(pos !== preferredPositions[0]);
+                setIsShifted(align !== preferredAlignments[0]);
+                return;
+              }
+            }
+          }
+        }
+
+        // Fallback: center of viewport
+        const fallbackStyle = useAbsolutePosition && anchorElement
+          ? (() => {
+              const anchorRect = anchorElement.getBoundingClientRect();
+              return {
+                position: 'absolute' as const,
+                top: `${(boundaryRect.height - mHeight) / 2 - anchorRect.top}px`,
+                left: `${(boundaryRect.width - mWidth) / 2 - anchorRect.left}px`,
+                zIndex: 50,
+              };
+            })()
+          : {
+            position: 'fixed' as const,
+            top: `${(boundaryRect.height - mHeight) / 2}px`,
+            left: `${(boundaryRect.width - mWidth) / 2}px`,
             zIndex: 50,
           };
-        })()
-      : {
-        position: 'fixed' as const,
-        top: `${(boundaryRect.height - mHeight) / 2}px`,
-        left: `${(boundaryRect.width - mWidth) / 2}px`,
-        zIndex: 50,
-      };
 
-    setStyle(fallbackStyle);
-    setPosition('bottom');
-    setAlignment('center');
-    setIsFlipped(true);
-    setIsShifted(true);
+        setStyle(fallbackStyle);
+        setPosition('bottom');
+        setAlignment('center');
+        setIsFlipped(true);
+        setIsShifted(true);
+      }
     } catch (err) {
-      console.error('[useDropdownPosition] calculatePosition error:', err);
-      // Fallback to safe position
-      setStyle({
-        position: 'fixed',
-        top: '50%',
-        left: '50%',
-        transform: 'translate(-50%, -50%)',
-        zIndex: 50,
-      });
-    }
+        console.error('[useDropdownPosition] calculatePosition error:', err);
+        // Fallback to safe position
+        setStyle({
+          position: 'fixed',
+          top: '50%',
+          left: '50%',
+          transform: 'translate(-50%, -50%)',
+          zIndex: 50,
+        });
+      }
+    };
   }, [
-    triggerRef,
-    menuRef,
     boundaryElement,
     anchorElement,
     preferredPositions,
@@ -350,6 +350,10 @@ export function useDropdownPosition(
     offset,
     useAbsolutePosition,
   ]);
+
+  const calculatePosition = useCallback(() => {
+    calculatePositionRef.current();
+  }, []);
 
   // Continuous position sync loop while menu is open
   useEffect(() => {
@@ -391,7 +395,8 @@ export function useDropdownPosition(
       cancelAnimationFrame(rafId);
       setStyle({});
     };
-  }, [isOpen, calculatePosition]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
 
   // Also recalculate when menu ref changes (menu renders)
   useEffect(() => {
@@ -400,7 +405,8 @@ export function useDropdownPosition(
         requestAnimationFrame(calculatePosition);
       });
     }
-  }, [menuRef.current, calculatePosition, isOpen]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [menuRef.current, isOpen]);
 
   return {
     style,
