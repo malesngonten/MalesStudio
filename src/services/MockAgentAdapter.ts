@@ -11,6 +11,7 @@ import {
   AgentSession,
   AgentToolCall,
   AgentAttachment,
+  AgentMessagePage,
 } from '../contracts/agentProtocol';
 import { TimelineData, TimelineClip } from '../types';
 
@@ -100,6 +101,14 @@ export class MockAgentAdapter implements IAgentClient {
   }
 
   async switchSession(sessionId: string): Promise<AgentMessage[]> {
+    const page = await this.loadSessionMessages(sessionId);
+    return page.messages;
+  }
+
+  async loadSessionMessages(
+    sessionId: string,
+    options?: { beforeIndex?: number; limit?: number }
+  ): Promise<AgentMessagePage> {
     this.activeSessionId = sessionId;
     if (!this.sessionMessages[sessionId]) {
       this.sessionMessages[sessionId] = [
@@ -111,7 +120,18 @@ export class MockAgentAdapter implements IAgentClient {
         },
       ];
     }
-    return [...this.sessionMessages[sessionId]];
+    const all = this.sessionMessages[sessionId];
+    const limit = Math.max(1, options?.limit ?? 30);
+    const end = Number.isFinite(options?.beforeIndex)
+      ? Math.min(Math.max(0, options!.beforeIndex as number), all.length)
+      : all.length;
+    const start = Math.max(0, end - limit);
+    return {
+      messages: all.slice(start, end),
+      hasMore: start > 0,
+      oldestIndex: start,
+      total: all.length,
+    };
   }
 
   async createSession(title?: string): Promise<AgentSession> {
@@ -142,6 +162,70 @@ export class MockAgentAdapter implements IAgentClient {
     if (this.activeSessionId === sessionId && this.sessions.length > 0) {
       this.activeSessionId = this.sessions[0].id;
     }
+  }
+
+  async renameSession(sessionId: string, newTitle: string): Promise<AgentSession> {
+    const session = this.sessions.find((s) => s.id === sessionId);
+    if (!session) throw new Error('Session not found');
+    session.title = newTitle;
+    session.updatedAt = new Date().toLocaleString('id-ID');
+    return { ...session };
+  }
+
+  async pinSession(sessionId: string, pinned: boolean): Promise<AgentSession> {
+    const session = this.sessions.find((s) => s.id === sessionId);
+    if (!session) throw new Error('Session not found');
+    session.isPinned = pinned;
+    session.updatedAt = new Date().toLocaleString('id-ID');
+    return { ...session };
+  }
+
+  async archiveSession(sessionId: string, archived: boolean): Promise<AgentSession> {
+    const session = this.sessions.find((s) => s.id === sessionId);
+    if (!session) throw new Error('Session not found');
+    session.isArchived = archived;
+    session.updatedAt = new Date().toLocaleString('id-ID');
+    return { ...session };
+  }
+
+  async trashSession(sessionId: string): Promise<void> {
+    const session = this.sessions.find((s) => s.id === sessionId);
+    if (!session) throw new Error('Session not found');
+    session.isDeleted = true;
+    session.deletedAt = new Date().toISOString();
+    session.updatedAt = new Date().toLocaleString('id-ID');
+    if (this.activeSessionId === sessionId && this.sessions.length > 0) {
+      this.activeSessionId = this.sessions.find((s) => !s.isDeleted && !s.isArchived)?.id || this.sessions[0].id;
+    }
+  }
+
+  async restoreSession(sessionId: string): Promise<AgentSession> {
+    const session = this.sessions.find((s) => s.id === sessionId);
+    if (!session) throw new Error('Session not found');
+    session.isDeleted = false;
+    session.deletedAt = undefined;
+    session.updatedAt = new Date().toLocaleString('id-ID');
+    return { ...session };
+  }
+
+  async purgeSession(sessionId: string): Promise<void> {
+    this.sessions = this.sessions.filter((s) => s.id !== sessionId);
+    delete this.sessionMessages[sessionId];
+    if (this.activeSessionId === sessionId && this.sessions.length > 0) {
+      this.activeSessionId = this.sessions[0].id;
+    }
+  }
+
+  async searchSessions(query: string): Promise<AgentSession[]> {
+    const q = query.toLowerCase();
+    return this.sessions.filter((s) => {
+      const titleMatch = s.title.toLowerCase().includes(q);
+      const previewMatch = s.lastMessagePreview?.toLowerCase().includes(q);
+      const messageMatch = this.sessionMessages[s.id]?.some((m) =>
+        (m.content || m.text || '').toLowerCase().includes(q)
+      );
+      return titleMatch || previewMatch || messageMatch;
+    });
   }
 
   abort(): void {

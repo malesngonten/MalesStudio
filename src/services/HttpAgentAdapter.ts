@@ -11,6 +11,7 @@ import {
   AgentSession,
   AgentAttachment,
   AgentToolCall,
+  AgentMessagePage,
 } from '../contracts/agentProtocol';
 import { TimelineData, TimelineClip, DiscoveredAgent } from '../types';
 import { agentClientInstance as mockInstance } from './MockAgentAdapter';
@@ -26,6 +27,61 @@ export class HttpAgentAdapter implements IAgentClient {
   private lastError: string | null = null;
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
+
+  /** Normalize a raw backend session into the UI contract (keeps history flags). */
+  private toAgentSession(raw: any): AgentSession {
+    if (!raw) {
+      throw new Error('Session tidak ditemukan');
+    }
+    return {
+      id: raw.id,
+      title: raw.title || 'Tanpa Judul',
+      createdAt: raw.createdAt || '',
+      updatedAt: raw.updatedAt || '',
+      messagesCount: raw.messages?.length ?? raw.messagesCount ?? 0,
+      isPinned: Boolean(raw.isPinned),
+      isArchived: Boolean(raw.isArchived),
+      isDeleted: Boolean(raw.isDeleted),
+      deletedAt: raw.deletedAt,
+      lastMessagePreview: raw.lastMessagePreview || '',
+      tags: Array.isArray(raw.tags) ? raw.tags : [],
+    };
+  }
+
+  /** Preserve all message metadata so continuing a session keeps attachments/context. */
+  private toAgentMessages(messages: any[]): AgentMessage[] {
+    if (!Array.isArray(messages)) return [];
+    return messages.map((m: any) => ({
+      id: m.id,
+      role: m.role,
+      content: m.content ?? m.text ?? '',
+      text: m.text ?? m.content ?? '',
+      timestamp: m.timestamp || '',
+      status: m.status,
+      attachments: m.attachments,
+      toolCalls: m.toolCalls,
+      checkpointHash: m.checkpointHash,
+      canRevert: m.canRevert,
+      context: m.context,
+      tokenUsage: m.tokenUsage,
+    }));
+  }
+
+  /** Fetch helper that reports HTTP failures instead of silently pretending success. */
+  private async requestJson(url: string, init?: RequestInit): Promise<any> {
+    const res = await fetch(url, init);
+    if (!res.ok) {
+      let detail = '';
+      try {
+        const body = await res.json();
+        detail = body?.error || JSON.stringify(body);
+      } catch {
+        detail = await res.text().catch(() => '');
+      }
+      throw new Error(`HTTP ${res.status}${detail ? `: ${detail}` : ''}`);
+    }
+    return res.json();
+  }
 
   constructor() {
     this.initSSE();
@@ -127,7 +183,6 @@ export class HttpAgentAdapter implements IAgentClient {
       this.eventSource.addEventListener('text_chunk', (e: MessageEvent) => {
         try {
           const data = JSON.parse(e.data);
-          console.log('[SSE] text_chunk received:', data.messageId, 'chunk len:', data.chunk?.length);
           if (this.onTextChunkCallback && data.chunk) {
             this.onTextChunkCallback(data.messageId, data.chunk);
           }
@@ -458,78 +513,138 @@ export class HttpAgentAdapter implements IAgentClient {
       return mockInstance.getSessions();
     }
     try {
-      const res = await fetch('/api/chats');
-      if (res.ok) {
-        const data = await res.json();
-        return data.sessions.map((s: any) => ({
-          id: s.id,
-          title: s.title,
-          createdAt: s.createdAt,
-          updatedAt: s.updatedAt,
-          messagesCount: s.messages?.length || 0,
-        }));
-      }
-    } catch {}
-    return mockInstance.getSessions();
+      const data = await this.requestJson('/api/chats');
+      return (data.sessions || []).map((s: any) => this.toAgentSession(s));
+    } catch {
+      return mockInstance.getSessions();
+    }
   }
 
   async switchSession(sessionId: string): Promise<AgentMessage[]> {
+    const page = await this.loadSessionMessages(sessionId);
+    return page.messages;
+  }
+
+  /**
+   * Fetch only one page of a transcript. The history/session endpoints return
+   * metadata only, so even a 1000-message conversation never blocks the UI by
+   * transferring and parsing the entire JSON file.
+   */
+  async loadSessionMessages(
+    sessionId: string,
+    options?: { beforeIndex?: number; limit?: number }
+  ): Promise<AgentMessagePage> {
     this.currentSessionId = sessionId;
     if (!this.backendAvailable) {
-      return mockInstance.switchSession(sessionId);
+      return mockInstance.loadSessionMessages(sessionId, options);
     }
     try {
-      const res = await fetch('/api/chats');
-      if (res.ok) {
-        const data = await res.json();
-        const found = data.sessions.find((s: any) => s.id === sessionId);
-        if (found) {
-          return found.messages.map((m: any) => ({
-            id: m.id,
-            role: m.role,
-            content: m.content || m.text,
-            timestamp: m.timestamp,
-            attachments: m.attachments,
-            toolCalls: m.toolCalls,
-          }));
-        }
+      const params = new URLSearchParams();
+      params.set('limit', String(options?.limit ?? 30));
+      if (typeof options?.beforeIndex === 'number' && Number.isFinite(options.beforeIndex)) {
+        params.set('before', String(options.beforeIndex));
       }
-    } catch {}
-    return mockInstance.switchSession(sessionId);
+      const data = await this.requestJson(
+        `/api/chats/${encodeURIComponent(sessionId)}/messages?${params.toString()}`
+      );
+      return {
+        messages: this.toAgentMessages(data.messages || []),
+        hasMore: Boolean(data.hasMore),
+        oldestIndex: Number(data.oldestIndex) || 0,
+        total: Number(data.total) || 0,
+      };
+    } catch {
+      return mockInstance.loadSessionMessages(sessionId, options);
+    }
   }
 
   async createSession(title?: string): Promise<AgentSession> {
     if (!this.backendAvailable) {
       return mockInstance.createSession(title);
     }
-    try {
-      const res = await fetch('/api/chats', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: title || 'Sesi Video Baru' }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        this.currentSessionId = data.session.id;
-        return {
-          id: data.session.id,
-          title: data.session.title,
-          createdAt: data.session.createdAt,
-          updatedAt: data.session.updatedAt,
-          messagesCount: 1,
-        };
-      }
-    } catch {}
-    return mockInstance.createSession(title);
+    const data = await this.requestJson('/api/chats', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: title || 'Sesi Video Baru' }),
+    });
+    this.currentSessionId = data.session.id;
+    return this.toAgentSession(data.session);
   }
 
   async deleteSession(sessionId: string): Promise<void> {
-    if (this.backendAvailable) {
-      try {
-        await fetch(`/api/chats/${sessionId}`, { method: 'DELETE' });
-      } catch {}
+    if (!this.backendAvailable) {
+      await mockInstance.deleteSession(sessionId);
+      return;
     }
-    await mockInstance.deleteSession(sessionId);
+    await this.requestJson(`/api/chats/${sessionId}`, { method: 'DELETE' });
+  }
+
+  async renameSession(sessionId: string, newTitle: string): Promise<AgentSession> {
+    if (!this.backendAvailable) {
+      return mockInstance.renameSession(sessionId, newTitle);
+    }
+    const data = await this.requestJson(`/api/chats/${sessionId}/rename`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: newTitle }),
+    });
+    return this.toAgentSession(data.session);
+  }
+
+  async pinSession(sessionId: string, pinned: boolean): Promise<AgentSession> {
+    if (!this.backendAvailable) {
+      return mockInstance.pinSession(sessionId, pinned);
+    }
+    const data = await this.requestJson(`/api/chats/${sessionId}/pin`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pinned }),
+    });
+    return this.toAgentSession(data.session);
+  }
+
+  async archiveSession(sessionId: string, archived: boolean): Promise<AgentSession> {
+    if (!this.backendAvailable) {
+      return mockInstance.archiveSession(sessionId, archived);
+    }
+    const data = await this.requestJson(`/api/chats/${sessionId}/archive`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ archived }),
+    });
+    return this.toAgentSession(data.session);
+  }
+
+  async trashSession(sessionId: string): Promise<void> {
+    if (!this.backendAvailable) {
+      await mockInstance.trashSession(sessionId);
+      return;
+    }
+    await this.requestJson(`/api/chats/${sessionId}/trash`, { method: 'POST' });
+  }
+
+  async restoreSession(sessionId: string): Promise<AgentSession> {
+    if (!this.backendAvailable) {
+      return mockInstance.restoreSession(sessionId);
+    }
+    const data = await this.requestJson(`/api/chats/${sessionId}/restore`, { method: 'POST' });
+    return this.toAgentSession(data.session);
+  }
+
+  async purgeSession(sessionId: string): Promise<void> {
+    if (!this.backendAvailable) {
+      await mockInstance.purgeSession(sessionId);
+      return;
+    }
+    await this.requestJson(`/api/chats/${sessionId}/purge`, { method: 'DELETE' });
+  }
+
+  async searchSessions(query: string): Promise<AgentSession[]> {
+    if (!this.backendAvailable) {
+      return mockInstance.searchSessions(query);
+    }
+    const data = await this.requestJson(`/api/chats/search?q=${encodeURIComponent(query)}`);
+    return (data.sessions || []).map((s: any) => this.toAgentSession(s));
   }
 
   async discoverAgents(): Promise<DiscoveredAgent[]> {

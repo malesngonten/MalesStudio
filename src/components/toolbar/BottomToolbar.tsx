@@ -1,5 +1,5 @@
-import React, { useCallback } from 'react';
-import { Layout, Layers, Code2, FolderOpen, List, MessageSquare, Settings, Boxes } from 'lucide-react';
+import React from 'react';
+import { Layers, Code2, FolderOpen, List, MessageSquare, Settings, Boxes, History } from 'lucide-react';
 
 interface BottomToolbarProps {
   isChatOpen: boolean;
@@ -8,6 +8,7 @@ interface BottomToolbarProps {
   onToggleTimeline: () => void;
   sessionsCount: number;
   onOpenChatHistory: () => void;
+  isHistoryOpen?: boolean;
   onOpenSettings: () => void;
   isAiConfigured?: boolean;
   isBackendAvailable?: boolean;
@@ -40,6 +41,7 @@ export const BottomToolbar: React.FC<BottomToolbarProps> = ({
   onToggleTimeline,
   sessionsCount,
   onOpenChatHistory,
+  isHistoryOpen = false,
   onOpenSettings,
   isAiConfigured,
   isBackendAvailable = true,
@@ -60,6 +62,13 @@ export const BottomToolbar: React.FC<BottomToolbarProps> = ({
       active: isChatOpen,
       onClick: onToggleChat,
       badge: sessionsCount > 0 ? sessionsCount : undefined,
+    },
+    {
+      id: 'riwayat',
+      label: 'Riwayat',
+      icon: History,
+      active: isHistoryOpen,
+      onClick: onOpenChatHistory,
     },
     {
       id: 'elements',

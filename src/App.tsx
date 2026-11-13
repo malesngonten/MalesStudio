@@ -93,12 +93,22 @@ export default function App() {
     handleStopAgent,
     handleSwitchSession,
     handleNewChat,
-    handleDeleteSession,
+    handleRenameSession,
+    handlePinSession,
+    handleArchiveSession,
+    handleTrashSession,
+    handleRestoreSession,
+    handlePurgeSession,
+    handleSearchSessions,
     agentSettings,
     handleUpdateSettings,
     handleResetStudio,
     isBackendAvailable,
     streamingMessageId,
+    messagesHasMore,
+    messagesTotal,
+    isLoadingOlderMessages,
+    handleLoadOlderMessages,
     toast,
     showToast,
     hideToast,
@@ -453,6 +463,11 @@ export default function App() {
               isByokConfigured={Boolean(agentSettings.apiBaseUrl && agentSettings.modelId)}
               streamingMessageId={streamingMessageId}
               activeToolCalls={activeToolCalls}
+              hasMoreMessages={messagesHasMore}
+              isLoadingOlderMessages={isLoadingOlderMessages}
+              onLoadOlderMessages={handleLoadOlderMessages}
+              totalMessages={messagesTotal}
+              activeSessionId={activeSessionId}
             />
           </div>
         </div>
@@ -540,7 +555,13 @@ export default function App() {
         activeSessionId={activeSessionId}
         onSelectSession={handleSwitchSession}
         onNewChat={handleNewChat}
-        onDeleteSession={handleDeleteSession}
+        onRenameSession={handleRenameSession}
+        onPinSession={handlePinSession}
+        onArchiveSession={handleArchiveSession}
+        onTrashSession={handleTrashSession}
+        onRestoreSession={handleRestoreSession}
+        onPurgeSession={handlePurgeSession}
+        onSearchSessions={handleSearchSessions}
       />
 
       {/* Agent Discovery & ARM64 Diagnostics Drawer */}
@@ -730,6 +751,7 @@ export default function App() {
         onToggleTimeline={handleToggleTimeline}
         sessionsCount={sessions.length}
         onOpenChatHistory={() => setIsHistoryOpen(true)}
+        isHistoryOpen={isHistoryOpen}
         onOpenSettings={() => setIsSettingsOpen(true)}
         isAiConfigured={Boolean(agentSettings.apiBaseUrl && agentSettings.modelId)}
         isBackendAvailable={isBackendAvailable}

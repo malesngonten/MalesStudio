@@ -65,6 +65,31 @@ export interface AgentSession {
   createdAt: string;
   updatedAt: string;
   messagesCount: number;
+  /** Whether the session is pinned to the top */
+  isPinned?: boolean;
+  /** Whether the session is archived (hidden from main list) */
+  isArchived?: boolean;
+  /** Whether the session is in trash (soft deleted) */
+  isDeleted?: boolean;
+  /** When the session was moved to trash (for auto-cleanup) */
+  deletedAt?: string;
+  /** Preview of the last message for search/display */
+  lastMessagePreview?: string;
+  /** Tags for organization */
+  tags?: string[];
+}
+
+/**
+ * A page of messages loaded from a session. Long conversations are loaded in
+ * chunks so the UI never has to parse/render thousands of Markdown blocks at
+ * once. `oldestIndex` is the backend index of the first message in the page and
+ * `hasMore` tells the UI that older messages can still be fetched.
+ */
+export interface AgentMessagePage {
+  messages: AgentMessage[];
+  hasMore: boolean;
+  oldestIndex: number;
+  total: number;
 }
 
 /**
@@ -102,14 +127,44 @@ export interface IAgentClient {
   /** Retrieve session history */
   getSessions(): Promise<AgentSession[]>;
 
-  /** Switch active conversation session */
+  /** Switch active conversation session (loads the latest page of messages) */
   switchSession(sessionId: string): Promise<AgentMessage[]>;
+
+  /**
+   * Load a page of messages from a session. Omit `beforeIndex` for the newest
+   * page; pass an older `oldestIndex` to fetch the page before it.
+   */
+  loadSessionMessages(
+    sessionId: string,
+    options?: { beforeIndex?: number; limit?: number }
+  ): Promise<AgentMessagePage>;
 
   /** Create a new conversation session */
   createSession(title?: string): Promise<AgentSession>;
 
   /** Delete a conversation session */
   deleteSession(sessionId: string): Promise<void>;
+
+  /** Rename a conversation session */
+  renameSession(sessionId: string, newTitle: string): Promise<AgentSession>;
+
+  /** Pin/unpin a conversation session */
+  pinSession(sessionId: string, pinned: boolean): Promise<AgentSession>;
+
+  /** Archive/unarchive a conversation session */
+  archiveSession(sessionId: string, archived: boolean): Promise<AgentSession>;
+
+  /** Move session to trash (soft delete) */
+  trashSession(sessionId: string): Promise<void>;
+
+  /** Restore session from trash */
+  restoreSession(sessionId: string): Promise<AgentSession>;
+
+  /** Permanently delete a session (hard delete) */
+  purgeSession(sessionId: string): Promise<void>;
+
+  /** Search sessions by query */
+  searchSessions(query: string): Promise<AgentSession[]>;
 
   /** Discover available AI agents on host system */
   discoverAgents?(): Promise<DiscoveredAgent[]>;

@@ -495,6 +495,13 @@ let chatSessions: {
   createdAt: string;
   updatedAt: string;
   messages: any[];
+  messagesCount?: number;
+  lastMessagePreview?: string;
+  isPinned?: boolean;
+  isArchived?: boolean;
+  isDeleted?: boolean;
+  deletedAt?: string;
+  tags?: string[];
 }[] = [];
 
 function loadChatSessionsFromDisk() {
@@ -504,7 +511,19 @@ function loadChatSessionsFromDisk() {
       .map((file) => {
         try {
           const data = JSON.parse(fs.readFileSync(path.join(CHATS_DIR, file), 'utf-8'));
-          return data;
+          // Ensure new fields exist for backward compatibility
+          return {
+            ...data,
+            messagesCount: data.messages?.length || 0,
+            lastMessagePreview: data.messages?.length
+              ? (data.messages[data.messages.length - 1].content || data.messages[data.messages.length - 1].text || '').slice(0, 100)
+              : '',
+            isPinned: data.isPinned || false,
+            isArchived: data.isArchived || false,
+            isDeleted: data.isDeleted || false,
+            deletedAt: data.deletedAt || undefined,
+            tags: data.tags || [],
+          };
         } catch {}
         return null;
       })
@@ -518,60 +537,54 @@ function loadChatSessionsFromDisk() {
     if (sessions.length > 0) {
       chatSessions = sessions;
     } else {
-      // Create default session if none exist
-      const defaultSession = {
-        id: 'session-main',
-        title: 'Edit Video Remotion Pertama',
-        createdAt: 'Hari ini',
-        updatedAt: 'Baru saja',
-        messages: [
-          {
-            id: 'msg-welcome',
-            role: 'assistant',
-            text: 'Halo! Saya AI Coding Agent di Males Ngonten Studio. Siap membantu membuat dan mengubah layer teks, durasi, animasi, dan musik di video Remotion Anda.',
-            timestamp: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
-            toolCalls: [
-              {
-                id: 'tc-init',
-                toolName: 'discoverWorkspace',
-                target: 'projects/proyek-remotion-1',
-                status: 'completed',
-                durationMs: 85,
-                result: 'Workspace loaded: 4 layers, 150 frames @ 30fps',
-              },
-            ],
-          },
-        ],
-      };
-      chatSessions = [defaultSession];
-      const chatFile = path.join(CHATS_DIR, `${defaultSession.id}.json`);
-      fs.writeFileSync(chatFile, JSON.stringify(defaultSession, null, 2), 'utf-8');
+      // Tidak ada sesi tersimpan — biarkan kosong. Session dibuat saat user kirim prompt pertama.
+      chatSessions = [];
     }
   } catch {
-    // Fallback to default session
-    chatSessions = [
-      {
-        id: 'session-main',
-        title: 'Edit Video Remotion Pertama',
-        createdAt: 'Hari ini',
-        updatedAt: 'Baru saja',
-        messages: [
-          {
-            id: 'msg-welcome',
-            role: 'assistant',
-            text: 'Halo! Saya AI Coding Agent di Males Ngonten Studio. Siap membantu membuat dan mengubah layer teks, durasi, animasi, dan musik di video Remotion Anda.',
-            timestamp: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
-          },
-        ],
-      },
-    ];
+    // Error baca disk — biarkan kosong, jangan buat default session
+    chatSessions = [];
   }
 }
 
 loadChatSessionsFromDisk();
 
-let activeSessionId = chatSessions[0]?.id || 'session-main';
+let activeSessionId = chatSessions[0]?.id || null;
 let selectedAgentId = 'agent-builtin';
+
+/**
+ * Single write path for chat sessions. Keeps derived metadata (message count,
+ * last-message preview) in sync so history list & backend search stay accurate
+ * no matter which agent flow produced the message.
+ */
+function persistSession(session: any) {
+  if (Array.isArray(session.messages)) {
+    session.messagesCount = session.messages.length;
+    const lastMsg = session.messages[session.messages.length - 1];
+    session.lastMessagePreview = lastMsg
+      ? String(lastMsg.content || lastMsg.text || '').slice(0, 100)
+      : '';
+  }
+  const chatFile = path.join(CHATS_DIR, `${session.id}.json`);
+  fs.writeFileSync(chatFile, JSON.stringify(session, null, 2), 'utf-8');
+}
+
+/**
+ * Never send full transcripts in session-list responses. A long conversation
+ * can be hundreds of KB; sending every transcript on every history refresh was
+ * the main cause of the UI becoming sluggish. Message bodies are fetched
+ * separately through the paginated /api/chats/:id/messages endpoint.
+ */
+function toSessionSummary(session: any) {
+  if (!session) return session;
+  const { messages, ...summary } = session;
+  return {
+    ...summary,
+    messagesCount: Array.isArray(messages)
+      ? messages.length
+      : Number(session.messagesCount) || 0,
+  };
+}
+
 
 // Active Agent Status
 let agentStatus: 'idle' | 'connecting' | 'thinking' | 'executing_tool' | 'streaming' | 'error' = 'idle';
@@ -1856,8 +1869,7 @@ app.post('/api/agent/prompt', async (req, res) => {
       };
       chatSessions.unshift(currentSession);
       activeSessionId = defaultId;
-      const chatFile = path.join(CHATS_DIR, `${defaultId}.json`);
-      fs.writeFileSync(chatFile, JSON.stringify(currentSession, null, 2), 'utf-8');
+      persistSession(currentSession);
     }
   }
 
@@ -1911,9 +1923,9 @@ app.post('/api/agent/prompt', async (req, res) => {
     aiMessage.status = 'completed';
     broadcastSSE('message_complete', { messageId: aiMsgId, message: aiMessage });
 
-    const chatFile = path.join(CHATS_DIR, `${currentSession.id}.json`);
-    fs.writeFileSync(chatFile, JSON.stringify(currentSession, null, 2), 'utf-8');
-    return;
+    currentSession.updatedAt = new Date().toLocaleString('id-ID');
+    persistSession(currentSession);
+    return res.json({ success: true, messageId: aiMsgId });
   }
 
   res.json({ success: true, messageId: aiMsgId });
@@ -2432,8 +2444,8 @@ User request:
         aiMessage.text = warningMsg;
         aiMessage.status = 'error';
         broadcastSSE('message_complete', { messageId: aiMsgId, message: aiMessage });
-        const chatFile = path.join(CHATS_DIR, `${currentSession.id}.json`);
-        fs.writeFileSync(chatFile, JSON.stringify(currentSession, null, 2), 'utf-8');
+        currentSession.updatedAt = new Date().toLocaleString('id-ID');
+        persistSession(currentSession);
         return;
       }
 
@@ -2443,8 +2455,8 @@ User request:
         aiMessage.text = errorMsg;
         aiMessage.status = 'error';
         broadcastSSE('message_complete', { messageId: aiMsgId, message: aiMessage });
-        const chatFile = path.join(CHATS_DIR, `${currentSession.id}.json`);
-        fs.writeFileSync(chatFile, JSON.stringify(currentSession, null, 2), 'utf-8');
+        currentSession.updatedAt = new Date().toLocaleString('id-ID');
+        persistSession(currentSession);
         return;
       }
 
@@ -2883,8 +2895,8 @@ User request:
         aiMessage.status = 'failed';
         multiTurnHandled = true;
         broadcastSSE('message_complete', { messageId: aiMsgId, message: aiMessage });
-        const chatFile = path.join(CHATS_DIR, `${currentSession.id}.json`);
-        fs.writeFileSync(chatFile, JSON.stringify(currentSession, null, 2), 'utf-8');
+        currentSession.updatedAt = new Date().toLocaleString('id-ID');
+        persistSession(currentSession);
       }
 
       // Legacy support: old-style timelineChanges without toolCalls (backward compat)
@@ -3003,9 +3015,9 @@ User request:
         message: aiMessage,
       });
 
-      // Save transcript to chat session
-      const chatFile = path.join(CHATS_DIR, `${currentSession.id}.json`);
-      fs.writeFileSync(chatFile, JSON.stringify(currentSession, null, 2), 'utf-8');
+      // Save transcript to chat session with updated metadata
+      currentSession.updatedAt = new Date().toLocaleString('id-ID');
+      persistSession(currentSession);
     } catch (err: any) {
       if (isTimeout) {
         aiMessage.text = '⏱️ Waktu pemrosesan AI habis (timeout). Provider terlalu lama menanggapi, coba lagi atau pilih model yang lebih ringan.';
@@ -3026,44 +3038,189 @@ User request:
 
 // 7. GET/POST/DELETE /api/chats
 app.get('/api/chats', (req, res) => {
-  res.json({ sessions: chatSessions, activeSessionId });
+  // Metadata only — transcripts are loaded lazily per session.
+  res.json({ sessions: chatSessions.map(toSessionSummary), activeSessionId });
+});
+
+// GET /api/chats/:id/messages - paginated transcript for one session
+app.get('/api/chats/:id/messages', (req, res) => {
+  const session = chatSessions.find((s) => s.id === req.params.id);
+  if (!session) {
+    return res.status(404).json({ success: false, error: 'Session not found' });
+  }
+
+  const allMessages = Array.isArray(session.messages) ? session.messages : [];
+  const rawLimit = parseInt(String(req.query.limit ?? '30'), 10);
+  const limit = Number.isFinite(rawLimit) ? Math.min(200, Math.max(1, rawLimit)) : 30;
+  const rawBefore = parseInt(String(req.query.before ?? ''), 10);
+  const end = Number.isFinite(rawBefore)
+    ? Math.min(Math.max(0, rawBefore), allMessages.length)
+    : allMessages.length;
+  const start = Math.max(0, end - limit);
+
+  res.json({
+    messages: allMessages.slice(start, end),
+    hasMore: start > 0,
+    oldestIndex: start,
+    total: allMessages.length,
+  });
 });
 
 app.post('/api/chats', (req, res) => {
   const newId = 'session-' + Date.now();
+  const welcomeText = 'Sesi baru dimulai. Berikan instruksi untuk membuat atau mengedit video Remotion!';
   const newSession = {
     id: newId,
     title: req.body.title || 'Obrolan Baru',
     createdAt: 'Hari ini',
     updatedAt: 'Baru saja',
+    messagesCount: 1,
+    lastMessagePreview: welcomeText,
+    isPinned: false,
+    isArchived: false,
+    isDeleted: false,
+    tags: [],
     messages: [
       {
         id: 'msg-init-' + Date.now(),
         role: 'assistant',
-        text: 'Sesi baru dimulai. Berikan instruksi untuk membuat atau mengedit video Remotion!',
-        content: 'Sesi baru dimulai. Berikan instruksi untuk membuat atau mengedit video Remotion!',
+        text: welcomeText,
+        content: welcomeText,
         timestamp: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
       },
     ],
   };
   chatSessions.unshift(newSession);
   activeSessionId = newId;
-
-  const chatFile = path.join(CHATS_DIR, `${newId}.json`);
-  fs.writeFileSync(chatFile, JSON.stringify(newSession, null, 2), 'utf-8');
-
-  res.json({ success: true, session: newSession });
+  persistSession(newSession);
+  res.json({ success: true, session: toSessionSummary(newSession) });
 });
 
 app.delete('/api/chats/:id', (req, res) => {
   const { id } = req.params;
   chatSessions = chatSessions.filter((s) => s.id !== id);
-  if (activeSessionId === id && chatSessions.length > 0) {
-    activeSessionId = chatSessions[0].id;
+  if (activeSessionId === id) {
+    activeSessionId =
+      chatSessions.find((s) => !s.isDeleted && !s.isArchived)?.id ||
+      chatSessions[0]?.id ||
+      activeSessionId;
   }
   const chatFile = path.join(CHATS_DIR, `${id}.json`);
   if (fs.existsSync(chatFile)) fs.unlinkSync(chatFile);
   res.json({ success: true, activeSessionId });
+});
+
+/* ========================================================
+ * CHAT HISTORY MANAGEMENT ENDPOINTS
+ * ======================================================== */
+
+// PATCH /api/chats/:id/rename - Rename session
+app.patch('/api/chats/:id/rename', (req, res) => {
+  const { id } = req.params;
+  const { title } = req.body;
+  const session = chatSessions.find((s) => s.id === id);
+  if (!session) {
+    return res.status(404).json({ success: false, error: 'Session not found' });
+  }
+  session.title = title || 'Tanpa Judul';
+  session.updatedAt = new Date().toLocaleString('id-ID');
+  persistSession(session);
+  res.json({ success: true, session: toSessionSummary(session) });
+});
+
+// PATCH /api/chats/:id/pin - Pin/unpin session
+app.patch('/api/chats/:id/pin', (req, res) => {
+  const { id } = req.params;
+  const { pinned } = req.body;
+  const session = chatSessions.find((s) => s.id === id);
+  if (!session) {
+    return res.status(404).json({ success: false, error: 'Session not found' });
+  }
+  session.isPinned = !!pinned;
+  session.updatedAt = new Date().toLocaleString('id-ID');
+  persistSession(session);
+  res.json({ success: true, session: toSessionSummary(session) });
+});
+
+// PATCH /api/chats/:id/archive - Archive/unarchive session
+app.patch('/api/chats/:id/archive', (req, res) => {
+  const { id } = req.params;
+  const { archived } = req.body;
+  const session = chatSessions.find((s) => s.id === id);
+  if (!session) {
+    return res.status(404).json({ success: false, error: 'Session not found' });
+  }
+  session.isArchived = !!archived;
+  session.updatedAt = new Date().toLocaleString('id-ID');
+  persistSession(session);
+  res.json({ success: true, session: toSessionSummary(session) });
+});
+
+// POST /api/chats/:id/trash - Move session to trash (soft delete)
+app.post('/api/chats/:id/trash', (req, res) => {
+  const { id } = req.params;
+  const session = chatSessions.find((s) => s.id === id);
+  if (!session) {
+    return res.status(404).json({ success: false, error: 'Session not found' });
+  }
+  session.isDeleted = true;
+  session.deletedAt = new Date().toISOString();
+  session.updatedAt = new Date().toLocaleString('id-ID');
+  persistSession(session);
+  if (activeSessionId === id) {
+    activeSessionId =
+      chatSessions.find((s) => !s.isDeleted && !s.isArchived)?.id ||
+      chatSessions[0]?.id ||
+      activeSessionId;
+  }
+  res.json({ success: true, session: toSessionSummary(session) });
+});
+
+// POST /api/chats/:id/restore - Restore session from trash
+app.post('/api/chats/:id/restore', (req, res) => {
+  const { id } = req.params;
+  const session = chatSessions.find((s) => s.id === id);
+  if (!session) {
+    return res.status(404).json({ success: false, error: 'Session not found' });
+  }
+  session.isDeleted = false;
+  session.deletedAt = undefined;
+  session.updatedAt = new Date().toLocaleString('id-ID');
+  persistSession(session);
+  res.json({ success: true, session: toSessionSummary(session) });
+});
+
+// DELETE /api/chats/:id/purge - Permanently delete session (hard delete)
+app.delete('/api/chats/:id/purge', (req, res) => {
+  const { id } = req.params;
+  chatSessions = chatSessions.filter((s) => s.id !== id);
+  if (activeSessionId === id) {
+    activeSessionId =
+      chatSessions.find((s) => !s.isDeleted && !s.isArchived)?.id ||
+      chatSessions[0]?.id ||
+      activeSessionId;
+  }
+  const chatFile = path.join(CHATS_DIR, `${id}.json`);
+  if (fs.existsSync(chatFile)) fs.unlinkSync(chatFile);
+  res.json({ success: true, activeSessionId });
+});
+
+// GET /api/chats/search - Search sessions
+app.get('/api/chats/search', (req, res) => {
+  const { q } = req.query;
+  const query = (q as string)?.toLowerCase() || '';
+  if (!query) {
+    return res.json({ sessions: [] });
+  }
+  const results = chatSessions.filter((s) => {
+    const titleMatch = s.title.toLowerCase().includes(query);
+    const previewMatch = s.lastMessagePreview?.toLowerCase().includes(query);
+    const messageMatch = s.messages?.some((m: any) =>
+      (m.content || m.text || '').toLowerCase().includes(query)
+    );
+    return titleMatch || previewMatch || messageMatch;
+  });
+  res.json({ sessions: results.map(toSessionSummary) });
 });
 
 // 8. GET /api/files & PUT /api/files/:filename

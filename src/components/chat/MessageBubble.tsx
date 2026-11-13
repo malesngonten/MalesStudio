@@ -27,6 +27,18 @@ const toolIconMap: Record<string, React.ElementType> = {
   renderVideo: CheckCircle2,
 };
 
+const REMARK_PLUGINS = [remarkGfm];
+
+/**
+ * Markdown parsing is the most expensive part of a message bubble. Memoizing
+ * it means completed messages are parsed once and never again while the user
+ * scrolls or while another message streams.
+ */
+const MarkdownContent: React.FC<{ content: string }> = React.memo(({ content }) => (
+  <ReactMarkdown remarkPlugins={REMARK_PLUGINS}>{content}</ReactMarkdown>
+));
+MarkdownContent.displayName = 'MarkdownContent';
+
 /**
  * MessageBubble — Bubble pesan tunggal.
  *
@@ -37,7 +49,7 @@ const toolIconMap: Record<string, React.ElementType> = {
  * Saat pesan AI masih streaming (content masih kosong), tampilkan
  * StreamingIndicator di dalam bubble. Saat token mulai tiba, beralih ke teks asli.
  */
-export const MessageBubble: React.FC<MessageBubbleProps> = ({
+const MessageBubbleComponent: React.FC<MessageBubbleProps> = ({
   msg,
   isUser,
   streamingMessageId,
@@ -137,29 +149,31 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
         {isStreaming ? (
           <>
             <StreamingIndicator
-              status={agentStatusDetail?.status || 'streaming'}
+              status={
+                agentStatus === 'thinking' ||
+                agentStatus === 'executing_tool' ||
+                agentStatus === 'streaming'
+                  ? agentStatus
+                  : 'streaming'
+              }
               round={agentStatusDetail?.round}
               maxRounds={agentStatusDetail?.maxRounds}
               workingSeconds={agentWorkingSeconds}
               note={agentStatusDetail?.note}
               isStreamingTokens={msg.content.length > 0}
             />
+            {/* Plain text while streaming: parsing Markdown on every token is
+                unnecessarily expensive and would reflow the whole bubble. */}
             {msg.content && (
-              <div className="prose prose-invert prose-sm max-w-none break-words leading-relaxed mt-2 text-zinc-200">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                  {msg.content}
-                </ReactMarkdown>
+              <div className="whitespace-pre-wrap break-words leading-relaxed mt-2 text-zinc-200">
+                {msg.content}
               </div>
             )}
           </>
         ) : (
           <>
-            <div
-              className="prose prose-invert prose-sm max-w-none break-words leading-relaxed"
-            >
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                {msg.content || msg.text || ''}
-              </ReactMarkdown>
+            <div className="prose prose-invert prose-sm max-w-none break-words leading-relaxed">
+              <MarkdownContent content={msg.content || msg.text || ''} />
             </div>
 
             {/* Timestamp hanya muncul setelah pesan selesai (bukan saat loading) */}
@@ -252,3 +266,10 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
     </div>
   );
 };
+
+/**
+ * Memoized so completed messages never re-render when another message streams,
+ * the working-seconds timer ticks, or the user scrolls the timeline.
+ */
+export const MessageBubble = React.memo(MessageBubbleComponent);
+MessageBubble.displayName = 'MessageBubble';

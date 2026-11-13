@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import {
   ArrowUp,
   Square,
@@ -11,6 +11,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  ChevronUp,
   Terminal,
   Sparkles,
   Bot,
@@ -19,6 +20,7 @@ import {
   Mic,
   Send,
   Type,
+  Loader2,
 } from 'lucide-react';
 import { AgentMessage, AgentAttachment, AgentToolCall } from '../../contracts/agentProtocol';
 import { TimelineClip, TimelineLayer } from '../../types';
@@ -43,6 +45,15 @@ interface ChatPanelProps {
   isByokConfigured?: boolean;
   streamingMessageId?: string | null;
   activeToolCalls?: AgentToolCall[];
+  /** There are older messages on the backend that are not loaded yet. */
+  hasMoreMessages?: boolean;
+  /** True while an older page is being fetched. */
+  isLoadingOlderMessages?: boolean;
+  onLoadOlderMessages?: () => void;
+  /** Total messages stored in this session (for the "x of y" hint). */
+  totalMessages?: number;
+  /** Used to reset scroll position when switching conversations. */
+  activeSessionId?: string | null;
 }
 
 const AI_DIRECTOR_PROMPTS = [
@@ -106,6 +117,11 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   isByokConfigured,
   streamingMessageId = null,
   activeToolCalls = [],
+  hasMoreMessages = false,
+  isLoadingOlderMessages = false,
+  onLoadOlderMessages,
+  totalMessages = 0,
+  activeSessionId = null,
 }) => {
   const [inputText, setInputText] = useState('');
   const [attachments, setAttachments] = useState<AgentAttachment[]>([]);
@@ -127,9 +143,97 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     return () => { if (timer) clearInterval(timer); };
   }, [isAgentWorking]);
 
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Scrolling strategy:
+  // - Auto-scroll only while the user is already near the bottom, so reading
+  //   older messages or streaming output never yanks the viewport.
+  // - Scroll instantly (not smooth) per update; smooth scrolling on every
+  //   streamed token was one of the main sources of jank.
+  // - When older pages are prepended, preserve the current visual position.
+  const isNearBottomRef = useRef(true);
+  const loadingOlderRef = useRef(false);
+  const preserveScrollRef = useRef<{ height: number; top: number } | null>(null);
+  const lastMessageIdRef = useRef<string | null>(null);
+
+  const captureScrollForPrepend = () => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    preserveScrollRef.current = { height: el.scrollHeight, top: el.scrollTop };
+    loadingOlderRef.current = true;
+  };
+
+  const requestOlderMessages = () => {
+    if (!hasMoreMessages || isLoadingOlderMessages || loadingOlderRef.current) return;
+    captureScrollForPrepend();
+    onLoadOlderMessages?.();
+  };
+
+  const handleChatScroll = () => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    isNearBottomRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    if (
+      el.scrollTop < 80 &&
+      hasMoreMessages &&
+      !isLoadingOlderMessages &&
+      !loadingOlderRef.current
+    ) {
+      requestOlderMessages();
+    }
+  };
+
+  // Restore the viewport after older messages are prepended.
+  useLayoutEffect(() => {
+    const el = scrollContainerRef.current;
+    const saved = preserveScrollRef.current;
+    if (el && saved) {
+      el.scrollTop = el.scrollHeight - saved.height + saved.top;
+      preserveScrollRef.current = null;
+    }
+  }, [messages]);
+
+  // Reset when switching conversation.
+  useEffect(() => {
+    isNearBottomRef.current = true;
+    loadingOlderRef.current = false;
+    preserveScrollRef.current = null;
+    const el = scrollContainerRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [activeSessionId]);
+
+  // Keep the latest message visible only when the user is following the chat.
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const last = messages[messages.length - 1];
+    const lastId = last?.id || null;
+    const isNewLastMessage = lastId !== lastMessageIdRef.current;
+    lastMessageIdRef.current = lastId;
+    if (
+      isNearBottomRef.current ||
+      (isNewLastMessage && last?.role === 'user')
+    ) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [messages, streamingMessageId]);
+
+  useEffect(() => {
+    if (!isLoadingOlderMessages) {
+      loadingOlderRef.current = false;
+      if (preserveScrollRef.current) {
+        const timer = setTimeout(() => {
+          preserveScrollRef.current = null;
+        }, 800);
+        return () => clearTimeout(timer);
+      }
+    }
+    return undefined;
+  }, [isLoadingOlderMessages]);
 
   // Sync prefilled prompt when provided from canvas
   useEffect(() => {
@@ -145,11 +249,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       textareaRef.current?.focus();
     }
   }, [prefilledPrompt]);
-
-  // Auto-scroll to bottom
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, streamingMessageId]);
 
   // Adjust textarea height and border-radius dynamically based on line count
   const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -267,7 +366,35 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       {/* Active Tool Calls Panel — dipindah ke dalam timeline chat agar tidak menutupi */}
 
       {/* Scrollable Chat Timeline */}
-      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-3.5 sm:px-5 py-4 space-y-4 text-sm">
+      <div
+        ref={scrollContainerRef}
+        onScroll={handleChatScroll}
+        className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-3.5 sm:px-5 py-4 space-y-4 text-sm"
+      >
+        {/* Older messages are fetched on demand, not all at once. */}
+        {hasMoreMessages && (
+          <div className="flex flex-col items-center gap-1 pb-1">
+            <button
+              type="button"
+              onClick={requestOlderMessages}
+              disabled={isLoadingOlderMessages}
+              className="tap inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-gradient-to-r from-zinc-850 to-zinc-800 hover:from-zinc-800 hover:to-zinc-750 text-zinc-300 text-[11px] font-medium shadow-sm disabled:opacity-50 transition-all"
+            >
+              {isLoadingOlderMessages ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <ChevronUp className="w-3.5 h-3.5" />
+              )}
+              {isLoadingOlderMessages ? 'Memuat pesan lama...' : 'Muat pesan sebelumnya'}
+            </button>
+            {totalMessages > messages.length && (
+              <span className="text-[10px] text-zinc-600">
+                {messages.length} dari {totalMessages} pesan dimuat
+              </span>
+            )}
+          </div>
+        )}
+
         {/* Active Tool Calls Panel — inline di dalam timeline, ikut scroll bersama pesan */}
         {activeToolCalls.length > 0 && (
           <div className="p-2.5 rounded-2xl bg-gradient-to-b from-[#181822] to-[#101015] shadow-sm border border-white/5">
@@ -348,22 +475,24 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
         {messages.map((msg, index) => {
           const isUser = msg.role === 'user';
-          const isLastMessage = index === messages.length - 1;
-          const isLastAIMessage = isLastMessage && !isUser;
+          const isStreamingMessage = msg.id === streamingMessageId;
 
           return (
-            <React.Fragment key={`${msg.id || 'msg'}-${index}`}>
-              <div className={`max-w-full`}>
-                <MessageBubble
-                  msg={msg}
-                  isUser={isUser}
-                  streamingMessageId={streamingMessageId}
-                  agentStatus={agentStatus}
-                  agentStatusDetail={agentStatusDetail}
-                  agentWorkingSeconds={agentWorkingSeconds}
-                />
-              </div>
-            </React.Fragment>
+            <div
+              key={msg.id || `msg-${index}`}
+              className="max-w-full [content-visibility:auto] [contain-intrinsic-size:auto_140px]"
+            >
+              <MessageBubble
+                msg={msg}
+                isUser={isUser}
+                streamingMessageId={streamingMessageId}
+                // Non-streaming bubbles stay memoized: these props must not
+                // change every second or every streamed token.
+                agentStatus={isStreamingMessage ? agentStatus : undefined}
+                agentStatusDetail={isStreamingMessage ? agentStatusDetail : undefined}
+                agentWorkingSeconds={isStreamingMessage ? agentWorkingSeconds : 0}
+              />
+            </div>
           );
         })}
 
