@@ -703,13 +703,10 @@ export const RemotionPreview: React.FC<RemotionPreviewProps> = ({
 
               {isAspectMenuOpen && typeof document !== 'undefined' && document.body && (
                 createPortal(
-                  <div>
+                  <div onMouseDown={(e) => e.stopPropagation()}>
                     <div
                       className="fixed inset-0 z-40"
-                      onMouseDown={(e) => {
-                        e.preventDefault();
-                        setIsAspectMenuOpen(false);
-                      }}
+                      onClick={() => setIsAspectMenuOpen(false)}
                     />
                     <AspectRatioMenu
                       aspectMenuRef={aspectMenuRef}
