@@ -1,7 +1,7 @@
 import React from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Sparkles, Terminal, CheckCircle2 } from 'lucide-react';
+import { Sparkles, Terminal, CheckCircle2, Square } from 'lucide-react';
 import { StreamingIndicator } from './StreamingIndicator';
 import { AgentMessage, AgentToolCall } from '../../contracts/agentProtocol';
 
@@ -10,6 +10,12 @@ interface MessageBubbleProps {
   isUser: boolean;
   streamingMessageId: string | null;
   activeToolCalls?: AgentToolCall[];
+  /** Current agent status */
+  agentStatus?: 'idle' | 'connecting' | 'thinking' | 'executing_tool' | 'streaming' | 'error';
+  /** Agent status detail for streaming indicator */
+  agentStatusDetail?: { round?: number; maxRounds?: number; note?: string };
+  /** Seconds agent has been working */
+  agentWorkingSeconds?: number;
 }
 
 const toolIconMap: Record<string, React.ElementType> = {
@@ -36,6 +42,9 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   isUser,
   streamingMessageId,
   activeToolCalls = [],
+  agentStatusDetail,
+  agentStatus,
+  agentWorkingSeconds = 0,
 }) => {
   const isStreaming =
     !isUser && msg.role === 'assistant' && msg.id === streamingMessageId;
@@ -127,7 +136,14 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
         {/* Konten: streaming indicator + teks yang berkembang saat AI mengetik */}
         {isStreaming ? (
           <>
-            <StreamingIndicator />
+            <StreamingIndicator
+              status={agentStatusDetail?.status || 'streaming'}
+              round={agentStatusDetail?.round}
+              maxRounds={agentStatusDetail?.maxRounds}
+              workingSeconds={agentWorkingSeconds}
+              note={agentStatusDetail?.note}
+              isStreamingTokens={msg.content.length > 0}
+            />
             {msg.content && (
               <div className="prose prose-invert prose-sm max-w-none break-words leading-relaxed mt-2 text-zinc-200">
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>

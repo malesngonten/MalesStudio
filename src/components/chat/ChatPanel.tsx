@@ -27,6 +27,8 @@ import { MessageBubble } from './MessageBubble';
 interface ChatPanelProps {
   messages: AgentMessage[];
   isAgentWorking: boolean;
+  agentStatus?: 'idle' | 'connecting' | 'thinking' | 'executing_tool' | 'streaming' | 'error';
+  agentStatusDetail?: { round?: number; maxRounds?: number; note?: string };
   onSendMessage: (text: string, attachments: AgentAttachment[]) => void;
   onStopAgent: () => void;
   currentSec: string;
@@ -88,6 +90,8 @@ const getContextualPrompts = (clip?: TimelineClip | null): string[] => {
 export const ChatPanel: React.FC<ChatPanelProps> = ({
   messages,
   isAgentWorking,
+  agentStatus,
+  agentStatusDetail,
   onSendMessage,
   onStopAgent,
   currentSec,
@@ -107,6 +111,21 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   const [attachments, setAttachments] = useState<AgentAttachment[]>([]);
   const [expandedTools, setExpandedTools] = useState<Record<string, boolean>>({});
   const [isMultiLine, setIsMultiLine] = useState(false);
+  const [agentWorkingSeconds, setAgentWorkingSeconds] = useState(0);
+
+  // Timer for running seconds while agent is working
+  useEffect(() => {
+    let timer: NodeJS.Timeout | null = null;
+    if (isAgentWorking) {
+      setAgentWorkingSeconds(0);
+      timer = setInterval(() => {
+        setAgentWorkingSeconds((s) => s + 1);
+      }, 1000);
+    } else {
+      setAgentWorkingSeconds(0);
+    }
+    return () => { if (timer) clearInterval(timer); };
+  }, [isAgentWorking]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -329,18 +348,22 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
         {messages.map((msg, index) => {
           const isUser = msg.role === 'user';
+          const isLastMessage = index === messages.length - 1;
+          const isLastAIMessage = isLastMessage && !isUser;
 
           return (
-            <div
-              key={`${msg.id || 'msg'}-${index}`}
-              className={`max-w-full`}
-            >
-              <MessageBubble
-                msg={msg}
-                isUser={isUser}
-                streamingMessageId={streamingMessageId}
-              />
-            </div>
+            <React.Fragment key={`${msg.id || 'msg'}-${index}`}>
+              <div className={`max-w-full`}>
+                <MessageBubble
+                  msg={msg}
+                  isUser={isUser}
+                  streamingMessageId={streamingMessageId}
+                  agentStatus={agentStatus}
+                  agentStatusDetail={agentStatusDetail}
+                  agentWorkingSeconds={agentWorkingSeconds}
+                />
+              </div>
+            </React.Fragment>
           );
         })}
 
@@ -456,7 +479,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             onChange={handleTextChange}
             onKeyDown={handleKeyDown}
             placeholder="Make changes, add new features, ask for anything"
-            className="w-full bg-transparent text-white text-sm sm:text-base placeholder-zinc-500 resize-none outline-none px-1 py-1 min-h-[44px] max-h-[140px] font-sans text-left leading-relaxed transition-all duration-150"
+            disabled={isAgentWorking}
+            className="w-full bg-transparent text-white text-sm sm:text-base placeholder-zinc-500 resize-none outline-none px-1 py-1 min-h-[44px] max-h-[140px] font-sans text-left leading-relaxed transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed"
             style={{
               direction: 'ltr',
               textAlign: 'left',
@@ -472,7 +496,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
                 title="Tambahkan lampiran"
-                className="tap w-9 h-9 rounded-full bg-[#272730] hover:bg-[#343440] flex items-center justify-center text-zinc-300 hover:text-white transition-colors"
+                disabled={isAgentWorking}
+                className="tap w-9 h-9 rounded-full bg-[#272730] hover:bg-[#343440] flex items-center justify-center text-zinc-300 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <Plus className="w-4 h-4" />
               </button>
@@ -484,7 +509,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                 type="button"
                 onClick={onOpenSettings}
                 title="Pilih Model AI"
-                className="tap h-9 px-3.5 rounded-full bg-[#272730] hover:bg-[#343440] text-zinc-200 hover:text-white text-xs sm:text-sm font-medium flex items-center gap-1.5 transition-colors"
+                disabled={isAgentWorking}
+                className="tap h-9 px-3.5 rounded-full bg-[#272730] hover:bg-[#343440] text-zinc-200 hover:text-white text-xs sm:text-sm font-medium flex items-center gap-1.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <span className="truncate max-w-[110px] sm:max-w-[160px]">
                   {byokModelId ? byokModelId : 'Default'}
@@ -498,7 +524,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                   textareaRef.current?.focus();
                 }}
                 title="Input Suara"
-                className="tap w-9 h-9 rounded-full bg-[#272730] hover:bg-[#343440] flex items-center justify-center text-zinc-300 hover:text-white transition-colors"
+                disabled={isAgentWorking}
+                className="tap w-9 h-9 rounded-full bg-[#272730] hover:bg-[#343440] flex items-center justify-center text-zinc-300 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <Mic className="w-4 h-4" />
               </button>

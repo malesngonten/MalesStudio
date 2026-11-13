@@ -174,9 +174,9 @@
   border-radius: 999px;
   background: linear-gradient(
     90deg,
-    rgba(255, 255, 255, 0.07) 25%,
-    rgba(255, 255, 255, 0.16) 50%,
-    rgba(255, 255, 255, 0.07) 75%
+    rgba(255, 255, 255, 0.12) 25%,
+    rgba(255, 255, 255, 0.35) 50%,
+    rgba(255, 255, 255, 0.12) 75%
   );
   background-size: 200% 100%;
   animation: sk-shimmer 1.4s linear infinite;
@@ -184,7 +184,7 @@
 .sk-caret {
   width: 2px;
   height: 16px;
-  background: rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.8);
   animation: sk-blink 1s steps(1) infinite;
 }
 @keyframes sk-shimmer {

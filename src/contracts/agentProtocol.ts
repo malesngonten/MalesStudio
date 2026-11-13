@@ -46,6 +46,7 @@ export interface AgentMessage {
     selectedClipName?: string;
     selectedClipType?: string;
     selectedClipElementSlug?: string;
+    selectedClipElementFile?: string;
     selectedClipProps?: any;
     activeFile?: string;
   };

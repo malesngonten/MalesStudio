@@ -22,7 +22,10 @@ export class HttpAgentAdapter implements IAgentClient {
   private currentSessionId = 'session-main';
   private onToolUpdateCallback?: (msgId: string, tool: AgentToolCall) => void;
   private onFileChangedCallback?: (file: string, data: any) => void;
+  private onAgentStatusCallback?: (status: AgentStatus, extra?: { round?: number; maxRounds?: number; note?: string }) => void;
   private lastError: string | null = null;
+  private reconnectAttempts = 0;
+  private maxReconnectAttempts = 5;
 
   constructor() {
     this.initSSE();
@@ -82,12 +85,33 @@ export class HttpAgentAdapter implements IAgentClient {
       this.eventSource.onerror = () => {
         // Dev server or background task disconnected
         this.backendAvailable = false;
+        this.handleReconnect();
       };
 
       this.eventSource.addEventListener('agent_status', (e: MessageEvent) => {
         try {
           const data = JSON.parse(e.data);
           this.status = data.status;
+          // Forward to callback with extra info (round, maxRounds, note)
+          if (this.onAgentStatusCallback) {
+            this.onAgentStatusCallback(data.status, {
+              round: data.round,
+              maxRounds: data.maxRounds,
+              note: data.note,
+            });
+          }
+        } catch {}
+      });
+
+      this.eventSource.addEventListener('heartbeat', (e: MessageEvent) => {
+        try {
+          const data = JSON.parse(e.data);
+          // Heartbeat received - connection is alive
+          this.backendAvailable = true;
+          // Re-broadcast status to keep UI updated with running seconds
+          if (this.onAgentStatusCallback && this.status !== 'idle') {
+            this.onAgentStatusCallback(this.status, { note: 'connected' });
+          }
         } catch {}
       });
 
@@ -150,8 +174,27 @@ export class HttpAgentAdapter implements IAgentClient {
     }
   }
 
+  private handleReconnect() {
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+      console.log('[HttpAgentAdapter] Max reconnect attempts reached');
+      return;
+    }
+    this.reconnectAttempts++;
+    const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
+    console.log(`[HttpAgentAdapter] SSE disconnected, reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
+    setTimeout(() => {
+      if (this.eventSource?.readyState === EventSource.CLOSED) {
+        this.initSSE();
+      }
+    }, delay);
+  }
+
   public onFileChanged(cb: (file: string, data: any) => void) {
     this.onFileChangedCallback = cb;
+  }
+
+  public onAgentStatusChange(cb: (status: AgentStatus, extra?: { round?: number; maxRounds?: number; note?: string }) => void) {
+    this.onAgentStatusCallback = cb;
   }
 
   public onRenderProgress(cb: (job: any) => void) {

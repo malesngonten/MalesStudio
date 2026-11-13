@@ -104,6 +104,7 @@ export default function App() {
     hideToast,
     handleChangeAspectRatio,
     handleInsertTimelineClip,
+    agentStatusDetail,
   } = useStudioState();
 
   // Handle client-side render complete (blob URL from browser)
@@ -435,6 +436,8 @@ export default function App() {
                 agentStatus === 'streaming' ||
                 activeToolCalls.some((t) => t.status === 'running')
               }
+              agentStatus={agentStatus}
+              agentStatusDetail={agentStatusDetail}
               onSendMessage={handleSendMessage}
               onStopAgent={handleStopAgent}
               currentSec={currentSec}

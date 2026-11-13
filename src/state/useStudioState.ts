@@ -212,6 +212,7 @@ export function useStudioState() {
 
   // Agent State
   const [agentStatus, setAgentStatus] = useState<AgentStatus>('idle');
+  const [agentStatusDetail, setAgentStatusDetail] = useState<{ round?: number; maxRounds?: number; note?: string }>({});
   const [isBackendAvailable, setIsBackendAvailable] = useState<boolean>(true);
   const [sessions, setSessions] = useState<AgentSession[]>([]);
   // null saat tidak ada sesi aktif sama sekali (semua sudah dihapus) — jangan
@@ -335,6 +336,12 @@ export function useStudioState() {
 
     studioAgentClient.onRenderCancelled((jobId) => {
       setCurrentRenderJob(null);
+    });
+
+    // Agent status with round info (E)
+    studioAgentClient.onAgentStatusChange((status, extra) => {
+      setAgentStatus(status);
+      if (extra) setAgentStatusDetail(extra);
     });
   }, []);
 
@@ -865,6 +872,7 @@ export function useStudioState() {
     splitMode,
     setSplitMode,
     agentStatus,
+    agentStatusDetail,
     sessions,
     activeSessionId,
     setActiveSessionId,

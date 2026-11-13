@@ -24,7 +24,58 @@
           "elementProps": {},
           "props": {
             "text": "a to Z"
-          }
+          },
+          "elementFile": "src/components/a-to-z.element.tsx"
+        },
+        {
+          "id": "clip-el-a-to-z-2",
+          "name": "a to Z 2",
+          "from": 121,
+          "duration": 121,
+          "elementSlug": "a-to-z",
+          "elementProps": {
+            "accent": "#d4af37"
+          },
+          "props": {
+            "text": "a to Z 2"
+          },
+          "elementFile": "src/components/a-to-z.element.tsx"
+        },
+        {
+          "id": "clip-el-a-to-z-3",
+          "name": "a to Z 3",
+          "from": 242,
+          "duration": 121,
+          "elementSlug": "a-to-z",
+          "elementProps": {},
+          "props": {
+            "text": "a to Z 3"
+          },
+          "elementFile": "src/components/a-to-z.element.tsx"
+        },
+        {
+          "id": "clip-el-a-to-z-4",
+          "name": "a to Z 4",
+          "from": 363,
+          "duration": 121,
+          "elementSlug": "a-to-z",
+          "elementProps": {},
+          "props": {
+            "text": "a to Z 4"
+          },
+          "elementFile": "src/components/a-to-z.element.tsx"
+        },
+        {
+          "id": "clip-el-a-to-z-5",
+          "name": "a to Z 5",
+          "from": 484,
+          "duration": 121,
+          "elementSlug": "a-to-z",
+          "elementProps": {},
+          "props": {
+            "text": "a to Z 5"
+          },
+          "elementFile": "src/components/a-to-z.element.tsx"
         }
       ]
     },

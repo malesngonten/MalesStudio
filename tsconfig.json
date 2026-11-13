@@ -36,5 +36,5 @@
     "allowImportingTsExtensions": true,
     "noEmit": true
   },
-  "exclude": ["dist", "**/__tests__/**", "**/*.test.ts", "**/*.test.tsx"]
+  "exclude": ["dist", "projects", "**/__tests__/**", "**/*.test.ts", "**/*.test.tsx"]
 }
