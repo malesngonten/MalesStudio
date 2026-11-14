@@ -1,23 +1,63 @@
 import React from 'react';
-import { Film, Folder } from 'lucide-react';
+import { Film, Folder, ArrowLeft, Settings } from 'lucide-react';
 
 export type StudioView = 'studio' | 'storyboard' | 'code' | 'assets';
 
 interface HeaderProps {
   onOpenRender: () => void;
   isRendering?: boolean;
+  projectName?: string;
+  onBackToDashboard?: () => void;
+  onOpenSettings?: () => void;
 }
 
-export const Header: React.FC<HeaderProps> = ({ onOpenRender, isRendering }) => {
+export const Header: React.FC<HeaderProps> = ({
+  onOpenRender,
+  isRendering,
+  projectName,
+  onBackToDashboard,
+  onOpenSettings,
+}) => {
   return (
-    <header className="h-14 bg-[#0a0a0c] px-4 flex items-center justify-between shrink-0 z-30 border-b border-white/5 relative">
-      <div className="flex items-center">
-        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-red-600 via-red-700 to-red-800 shrink-0 shadow-lg flex items-center justify-center border border-white/10">
-          <Film className="w-5 h-5 text-white" />
-        </div>
+    <header className="h-14 bg-[#0a0a0c] px-3 sm:px-4 flex items-center justify-between shrink-0 z-30 border-b border-white/5 relative">
+      <div className="flex items-center gap-2 min-w-0 flex-1">
+        {onBackToDashboard ? (
+          <>
+            <button
+              type="button"
+              onClick={onBackToDashboard}
+              className="tap w-9 h-9 rounded-xl bg-white/5 hover:bg-white/10 text-zinc-300 hover:text-white flex items-center justify-center transition-colors shrink-0"
+              title="Kembali ke Dashboard"
+              aria-label="Kembali ke Dashboard"
+            >
+              <ArrowLeft className="w-5 h-5" />
+            </button>
+            <div className="min-w-0">
+              <h1 className="font-semibold text-sm text-white truncate">
+                {projectName || 'Project'}
+              </h1>
+              <p className="text-[10px] text-zinc-500">MalesStudio</p>
+            </div>
+          </>
+        ) : (
+          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-red-600 via-red-700 to-red-800 shrink-0 shadow-lg flex items-center justify-center border border-white/10">
+            <Film className="w-5 h-5 text-white" />
+          </div>
+        )}
       </div>
 
-      <div className="flex items-center gap-2 relative">
+      <div className="flex items-center gap-2 relative shrink-0">
+        {onOpenSettings && (
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            className="tap w-8 h-8 rounded-full bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white flex items-center justify-center transition-colors"
+            title="Pengaturan"
+            aria-label="Pengaturan"
+          >
+            <Settings className="w-4 h-4" />
+          </button>
+        )}
         <button type="button" className="tap w-8 h-8 rounded-full bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white flex items-center justify-center transition-colors" title="Folder">
           <Folder className="w-4.5 h-4.5" />
         </button>

@@ -1,64 +1,11 @@
 import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { Player, PlayerRef } from '@remotion/player';
-import { Play, Pause, Maximize2, RotateCcw, Layers, RefreshCw, Check } from 'lucide-react';
+import { Play, Pause, Maximize2, RotateCcw, Layers, RefreshCw } from 'lucide-react';
 import { TimelineData, TimelineClip } from '../../types';
 import { ShortVideoComposition } from '../../remotion/ShortVideoComposition';
 import { AspectRatioType, ASPECT_RATIOS } from '../../state/useStudioState';
-import { useDropdownPosition } from '../../hooks/useDropdownPosition';
-
-// Separate component for the aspect ratio menu to isolate errors
-interface AspectRatioMenuProps {
-  aspectMenuRef: React.RefObject<HTMLDivElement>;
-  aspectMenuStyle: React.CSSProperties;
-  currentRatio: AspectRatioType;
-  onChangeAspectRatio: (ratio: AspectRatioType) => void;
-  onClose: () => void;
-}
-
-const AspectRatioMenu: React.FC<AspectRatioMenuProps> = ({
-  aspectMenuRef,
-  aspectMenuStyle,
-  currentRatio,
-  onChangeAspectRatio,
-  onClose,
-}) => (
-  <div
-    ref={aspectMenuRef}
-    style={aspectMenuStyle}
-    className="bg-gradient-to-b from-[#181822] to-[#111116] rounded-2xl p-1.5 shadow-2xl space-y-1 animate-in fade-in slide-in-from-bottom-2 duration-150 min-w-[160px]"
-  >
-    <div className="px-2.5 py-1 text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">
-      Aspek Rasio
-    </div>
-    {(Object.keys(ASPECT_RATIOS) as AspectRatioType[]).map((r) => {
-      const cfg = ASPECT_RATIOS[r];
-      const isCur = r === currentRatio;
-      return (
-        <button
-          key={r}
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onChangeAspectRatio(r);
-            onClose();
-          }}
-          className={`w-full text-left px-2.5 py-1.5 rounded-xl text-xs font-semibold flex items-center justify-between transition-all ${
-            isCur
-              ? 'bg-red-600 text-white shadow-xs'
-              : 'text-zinc-300 hover:bg-white/10 hover:text-white'
-          }`}
-        >
-          <div className="flex flex-col">
-            <span>{r}</span>
-            <span className="text-[9px] font-normal opacity-75">{cfg.description}</span>
-          </div>
-          {isCur && <Check className="w-3.5 h-3.5" />}
-        </button>
-      );
-    })}
-  </div>
-);
+import { AspectRatioWheel } from './AspectRatioWheel';
 
 interface RemotionPreviewProps {
   timeline: TimelineData;
@@ -100,7 +47,7 @@ export const RemotionPreview: React.FC<RemotionPreviewProps> = ({
   const [zoomScale, setZoomScale] = useState<number>(1.0);
   const [panOffset, setPanOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [isGesturing, setIsGesturing] = useState<boolean>(false);
-  const [isAspectMenuOpen, setIsAspectMenuOpen] = useState<boolean>(false);
+  const [isAspectWheelOpen, setIsAspectWheelOpen] = useState<boolean>(false);
 
   // Dragging state on canvas for elements
   const [draggingClip, setDraggingClip] = useState<{
@@ -122,18 +69,8 @@ export const RemotionPreview: React.FC<RemotionPreviewProps> = ({
     return '9:16';
   })();
 
-  // Aspect ratio dropdown refs & positioning
+  // Aspect ratio wheel ref
   const aspectTriggerRef = useRef<HTMLButtonElement>(null);
-  const aspectMenuRef = useRef<HTMLDivElement>(null);
-  const { style: aspectMenuStyle } = useDropdownPosition(aspectTriggerRef, aspectMenuRef, {
-    preferredPositions: ['bottom', 'top'],
-    preferredAlignments: ['end', 'center', 'start'],
-    viewportGap: 12,
-    offset: 6,
-    flip: true,
-    shift: true,
-    isOpen: isAspectMenuOpen,
-  });
 
   // Touch gesture tracking references
   const gestureRef = useRef<{
@@ -687,37 +624,28 @@ export const RemotionPreview: React.FC<RemotionPreviewProps> = ({
 
         {/* Left: Timecode + Aspect Ratio Switcher */}
         <div className="flex items-center gap-2 shrink-0">
-          {/* Aspect Ratio Switcher Dropdown */}
+          {/* Aspect Ratio Switcher Wheel */}
           {onChangeAspectRatio && (
             <div className="relative">
               <button
                 ref={aspectTriggerRef}
                 type="button"
-                onClick={() => setIsAspectMenuOpen((prev) => !prev)}
+                onClick={() => setIsAspectWheelOpen((prev) => !prev)}
                 title={`Ubah Rasio Aspek Video (Saat ini: ${currentRatio})`}
                 className="tap px-2.5 py-1 rounded-full bg-zinc-850/80 hover:bg-zinc-750 text-zinc-300 hover:text-white flex items-center gap-1 text-xs font-semibold font-mono transition-all"
+                style={{ visibility: isAspectWheelOpen ? 'hidden' : 'visible' }}
               >
                 <span>{currentRatio}</span>
                 <span className="text-[10px] text-zinc-500">⌵</span>
               </button>
 
-              {isAspectMenuOpen && typeof document !== 'undefined' && document.body && (
-                createPortal(
-                  <div onMouseDown={(e) => e.stopPropagation()}>
-                    <div
-                      className="fixed inset-0 z-40"
-                      onClick={() => setIsAspectMenuOpen(false)}
-                    />
-                    <AspectRatioMenu
-                      aspectMenuRef={aspectMenuRef}
-                      aspectMenuStyle={aspectMenuStyle}
-                      currentRatio={currentRatio}
-                      onChangeAspectRatio={onChangeAspectRatio}
-                      onClose={() => setIsAspectMenuOpen(false)}
-                    />
-                  </div>
-                , document.body)
-              )}
+              <AspectRatioWheel
+                triggerRef={aspectTriggerRef}
+                currentRatio={currentRatio}
+                onChangeAspectRatio={onChangeAspectRatio}
+                onClose={() => setIsAspectWheelOpen(false)}
+                isOpen={isAspectWheelOpen}
+              />
             </div>
           )}
 

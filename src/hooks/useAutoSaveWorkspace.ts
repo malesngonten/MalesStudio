@@ -5,13 +5,32 @@ export const TIMELINE_STORAGE_KEY = 'males_ngonten_timeline';
 export const FILES_STORAGE_KEY = 'males_ngonten_files_state';
 
 /**
+ * Get project-scoped storage keys
+ */
+function getProjectKeys(projectId: string | null) {
+  if (projectId) {
+    return {
+      timelineKey: `males_studio_project_${projectId}_timeline`,
+      filesKey: `males_studio_project_${projectId}_files_state`,
+    };
+  }
+  return {
+    timelineKey: TIMELINE_STORAGE_KEY,
+    filesKey: FILES_STORAGE_KEY,
+  };
+}
+
+/**
  * Loads persisted workspace files from localStorage, falling back to defaultFiles.
+ * Now supports project-scoped storage.
  */
 export function loadSavedFilesState(
-  defaultFiles: Record<string, string>
+  defaultFiles: Record<string, string>,
+  projectId: string | null = null
 ): Record<string, string> {
+  const { filesKey } = getProjectKeys(projectId);
   try {
-    const saved = localStorage.getItem(FILES_STORAGE_KEY);
+    const saved = localStorage.getItem(filesKey);
     if (saved) {
       const parsed = JSON.parse(saved);
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
@@ -24,14 +43,36 @@ export function loadSavedFilesState(
   return defaultFiles;
 }
 
+export function loadSavedTimeline(
+  defaultTimeline: TimelineData,
+  projectId: string | null = null
+): TimelineData {
+  const { timelineKey } = getProjectKeys(projectId);
+  try {
+    const saved = localStorage.getItem(timelineKey);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (parsed && parsed.layers) {
+        return parsed;
+      }
+    }
+  } catch {
+    // Ignore
+  }
+  return defaultTimeline;
+}
+
 /**
  * Periodically persists the current timeline state and filesState to localStorage
  * so user progress survives browser refreshes.
+ * Now supports project-scoped storage.
  */
 export function useAutoSaveWorkspace(
   timeline: TimelineData,
   filesState: Record<string, string>,
-  intervalMs: number = 5000
+  projectId: string | null = null,
+  intervalMs: number = 5000,
+  enabled: boolean = true
 ): void {
   const timelineRef = useRef<TimelineData>(timeline);
   const filesStateRef = useRef<Record<string, string>>(filesState);
@@ -39,15 +80,19 @@ export function useAutoSaveWorkspace(
   timelineRef.current = timeline;
   filesStateRef.current = filesState;
 
+  const { timelineKey, filesKey } = getProjectKeys(projectId);
+
   useEffect(() => {
+    if (!enabled) return undefined;
+
     const persistNow = () => {
       try {
         localStorage.setItem(
-          TIMELINE_STORAGE_KEY,
+          timelineKey,
           JSON.stringify(timelineRef.current)
         );
         localStorage.setItem(
-          FILES_STORAGE_KEY,
+          filesKey,
           JSON.stringify(filesStateRef.current)
         );
       } catch {
@@ -71,5 +116,5 @@ export function useAutoSaveWorkspace(
       window.removeEventListener('beforeunload', persistNow);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [intervalMs]);
+  }, [intervalMs, timelineKey, filesKey, enabled]);
 }

@@ -116,10 +116,12 @@ export const BottomToolbar: React.FC<BottomToolbarProps> = ({
 
   return (
     <>
-      {/* Fixed Bottom Navigation Bar — Mobile Dark Mode */}
-      <div className="fixed left-0 right-0 bottom-0 z-40 w-full pt-4 pb-[env(safe-area-inset-bottom)] select-none">
-        {/* Container: equal spacing between icons, horizontally scrollable */}
-        <div className="mx-auto flex w-full max-w-[640px] overflow-x-auto scrollbar-none whitespace-nowrap gap-3 px-3">
+      {/* Fixed Bottom Navigation Bar — Mobile Dark Mode, always on top of sheets */}
+      <div className="fixed left-0 right-0 bottom-0 z-[60] w-full select-none min-h-[56px] pb-[env(safe-area-inset-bottom)]">
+        {/* Background with blur — extends into safe area */}
+        <div className="absolute inset-0 bg-gradient-to-t from-[#09090c] via-[#09090c]/95 to-transparent backdrop-blur-xl" />
+        {/* Container: icons vertically centered in nav bar height */}
+        <div className="relative mx-auto flex w-full max-w-[640px] h-[56px] items-center overflow-x-auto scrollbar-none whitespace-nowrap gap-3 px-3">
           {tabs.map((tab) => (
             <button
               key={tab.id}
@@ -127,7 +129,7 @@ export const BottomToolbar: React.FC<BottomToolbarProps> = ({
               onClick={tab.onClick}
               aria-label={tab.label}
               aria-pressed={tab.active}
-              className={`tap shrink-0 min-w-[44px] flex flex-col items-center justify-center gap-1 py-1.5 px-1.5 transition-all duration-300 outline-none relative ${
+              className={`tap shrink-0 min-w-[44px] h-[48px] flex flex-col items-center justify-center gap-1 px-1.5 transition-all duration-300 outline-none relative ${
                 tab.active
                   ? `text-[#E8102D]`
                   : `text-[#8A8A94]`

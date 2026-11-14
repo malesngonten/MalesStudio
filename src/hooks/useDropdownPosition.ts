@@ -98,6 +98,7 @@ export function useDropdownPosition(
 
   const rafRef = useRef<number>(0);
   const lastTriggerRectRef = useRef<DOMRect | null>(null);
+  const lastMenuSizeRef = useRef<{ width: number; height: number } | null>(null);
   const calculatePositionRef = useRef<() => void>(() => {});
 
   // Stable calculatePosition via ref to avoid infinite loop
@@ -111,24 +112,36 @@ export function useDropdownPosition(
 
         const boundary = boundaryElement || window;
         const boundaryRect = boundary === window
-          ? { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight }
-          : boundary.getBoundingClientRect();
+          ? {
+              left: 0,
+              top: 0,
+              width: window.innerWidth,
+              height: window.innerHeight,
+              right: window.innerWidth,
+              bottom: window.innerHeight,
+            }
+          : (boundary as HTMLElement).getBoundingClientRect();
 
         const triggerRect = trigger.getBoundingClientRect();
         const menuRect = menu.getBoundingClientRect();
 
-        // Skip if trigger position hasn't changed (optimization)
+        const mWidth = menuWidth || menuRect.width || 0;
+        const mHeight = menuHeight || menuRect.height || 0;
+
+        // Skip if trigger position AND menu size haven't changed (optimization)
+        const currentMenuSize = { width: mWidth, height: mHeight };
         if (lastTriggerRectRef.current &&
             lastTriggerRectRef.current.top === triggerRect.top &&
             lastTriggerRectRef.current.left === triggerRect.left &&
             lastTriggerRectRef.current.width === triggerRect.width &&
-            lastTriggerRectRef.current.height === triggerRect.height) {
+            lastTriggerRectRef.current.height === triggerRect.height &&
+            lastMenuSizeRef.current &&
+            lastMenuSizeRef.current.width === currentMenuSize.width &&
+            lastMenuSizeRef.current.height === currentMenuSize.height) {
           return;
         }
         lastTriggerRectRef.current = triggerRect;
-
-        const mWidth = menuWidth || menuRect.width || 0;
-        const mHeight = menuHeight || menuRect.height || 0;
+        lastMenuSizeRef.current = currentMenuSize;
 
         // If menu hasn't rendered yet, use fallback
         if (mWidth === 0 || mHeight === 0) {
@@ -148,7 +161,9 @@ export function useDropdownPosition(
               zIndex: 50,
             });
           }
-          // Test each preferred position
+          return;
+        }
+        // Test each preferred position
         for (const pos of preferredPositions) {
           for (const align of preferredAlignments) {
             let top = 0;
@@ -221,8 +236,8 @@ export function useDropdownPosition(
 
         // No perfect fit - try with flip/shift
         if (flip || shift) {
-          for (const pos of ['bottom', 'top', 'left', 'right']) {
-            for (const align of ['start', 'center', 'end']) {
+          for (const pos of ['bottom', 'top', 'left', 'right'] as const) {
+            for (const align of ['start', 'center', 'end'] as const) {
               let top = 0;
               let left = 0;
 
@@ -325,7 +340,7 @@ export function useDropdownPosition(
         setIsFlipped(true);
         setIsShifted(true);
       }
-    } catch (err) {
+    catch (err) {
         console.error('[useDropdownPosition] calculatePosition error:', err);
         // Fallback to safe position
         setStyle({

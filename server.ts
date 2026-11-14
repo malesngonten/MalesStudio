@@ -46,12 +46,14 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 // Directories
 const WORKSPACE_DIR = process.cwd();
 const PROJECTS_BASE = path.join(WORKSPACE_DIR, 'projects');
-const ACTIVE_PROJECT_DIR = path.join(PROJECTS_BASE, 'proyek-remotion-1');
+const DEFAULT_PROJECT_ID = 'proyek-remotion-1';
+let ACTIVE_PROJECT_DIR = path.join(PROJECTS_BASE, DEFAULT_PROJECT_ID);
 const OUT_DIR = path.join(WORKSPACE_DIR, 'out');
-const ASSETS_DIR = path.join(ACTIVE_PROJECT_DIR, 'public', 'assets');
-const CHATS_DIR = path.join(ACTIVE_PROJECT_DIR, '.males_ngonten', 'chats');
-const CHECKPOINTS_DIR = path.join(ACTIVE_PROJECT_DIR, '.males_ngonten', 'checkpoints');
-const CHECKPOINTS_INDEX_PATH = path.join(CHECKPOINTS_DIR, 'index.json');
+let ASSETS_DIR = path.join(ACTIVE_PROJECT_DIR, 'public', 'assets');
+let CHATS_DIR = path.join(ACTIVE_PROJECT_DIR, '.males_ngonten', 'chats');
+let CHECKPOINTS_DIR = path.join(ACTIVE_PROJECT_DIR, '.males_ngonten', 'checkpoints');
+let CHECKPOINTS_INDEX_PATH = path.join(CHECKPOINTS_DIR, 'index.json');
+const PROJECTS_INDEX_PATH = path.join(PROJECTS_BASE, 'projects.json');
 const SCRIPTS_DIR = path.join(WORKSPACE_DIR, 'scripts');
 const REMOCN_CATALOG_PATH = path.join(WORKSPACE_DIR, 'src', 'remotion', 'elements', 'remocn-catalog.json');
 
@@ -110,8 +112,16 @@ function loadCheckpointsFromIndex() {
   } catch {}
   // If no checkpoints exist yet, create initial commit
   if (gitCheckpoints.length === 0) {
-    const initialTimeline = JSON.stringify(DEFAULT_TIMELINE, null, 2);
-    const initialHash = createGitCheckpoint('Initial project scaffold with default Remotion timeline', DEFAULT_TIMELINE, true);
+    // Use the project's actual timeline so switching projects never overwrites
+    // the saved workspace with the global default timeline.
+    let currentTimeline: any = DEFAULT_TIMELINE;
+    try {
+      if (fs.existsSync(timelinePath)) {
+        currentTimeline = JSON.parse(fs.readFileSync(timelinePath, 'utf-8'));
+      }
+    } catch {}
+    const initialTimeline = JSON.stringify(currentTimeline, null, 2);
+    const initialHash = createGitCheckpoint('Initial project scaffold with default Remotion timeline', currentTimeline, true);
     gitCheckpoints = gitCheckpoints.filter((c) => c.hash !== initialHash);
     gitCheckpoints.unshift({
       hash: initialHash,
@@ -445,28 +455,330 @@ export const ShortVideoComposition: React.FC = () => {
 `;
 
 // Initialize files if not existing
-const timelinePath = path.join(ACTIVE_PROJECT_DIR, 'timeline.json');
+let timelinePath = path.join(ACTIVE_PROJECT_DIR, 'timeline.json');
 if (!fs.existsSync(timelinePath)) {
   fs.writeFileSync(timelinePath, JSON.stringify(DEFAULT_TIMELINE, null, 2), 'utf-8');
 }
 
-const assetsPath = path.join(ACTIVE_PROJECT_DIR, 'assets.json');
+let assetsPath = path.join(ACTIVE_PROJECT_DIR, 'assets.json');
 if (!fs.existsSync(assetsPath)) {
   fs.writeFileSync(assetsPath, JSON.stringify(DEFAULT_ASSETS, null, 2), 'utf-8');
 }
 
-const geminiRulesPath = path.join(ACTIVE_PROJECT_DIR, 'GEMINI.md');
+let geminiRulesPath = path.join(ACTIVE_PROJECT_DIR, 'GEMINI.md');
 if (!fs.existsSync(geminiRulesPath)) {
   fs.writeFileSync(geminiRulesPath, DEFAULT_GEMINI_RULES, 'utf-8');
 }
 
-const compPath = path.join(ACTIVE_PROJECT_DIR, 'src', 'Composition.tsx');
-if (!fs.existsSync(compPath)) {
+let compPath = path.join(ACTIVE_PROJECT_DIR, 'src', 'Composition.tsx');
+if (!fs.existsSync(compPath) || fs.statSync(compPath).size === 0) {
   fs.writeFileSync(compPath, DEFAULT_COMPOSITION, 'utf-8');
 }
 
 // Load checkpoints from disk after all paths are initialized
 loadCheckpointsFromIndex();
+
+// ---------------------------------------------------------------------------
+// Project registry & active-project switching
+// ---------------------------------------------------------------------------
+
+interface ServerProject {
+  id: string;
+  name: string;
+  description?: string;
+  thumbnail?: string;
+  createdAt: number;
+  updatedAt: number;
+  lastEditedAt: number;
+  aspectRatio: '9:16' | '16:9' | '1:1' | '4:5';
+  durationInFrames: number;
+  fps: number;
+}
+
+const PROJECT_ASPECTS: Record<string, { width: number; height: number; durationInFrames: number; fps: number }> = {
+  '9:16': { width: 1080, height: 1920, durationInFrames: 150, fps: 30 },
+  '16:9': { width: 1920, height: 1080, durationInFrames: 150, fps: 30 },
+  '1:1': { width: 1080, height: 1080, durationInFrames: 150, fps: 30 },
+  '4:5': { width: 1080, height: 1350, durationInFrames: 150, fps: 30 },
+};
+
+function isValidProjectId(id: string): boolean {
+  return typeof id === 'string' && /^[a-zA-Z0-9_-]+$/.test(id);
+}
+
+function projectDirFor(id: string): string {
+  return path.join(PROJECTS_BASE, id);
+}
+
+function defaultProjectMeta(): ServerProject {
+  const stat = fs.existsSync(ACTIVE_PROJECT_DIR)
+    ? fs.statSync(ACTIVE_PROJECT_DIR)
+    : null;
+  const created = stat ? stat.birthtimeMs || stat.ctimeMs : Date.now();
+  return {
+    id: DEFAULT_PROJECT_ID,
+    name: 'Proyek Remotion 1',
+    description: 'Project bawaan MalesStudio',
+    createdAt: created,
+    updatedAt: created,
+    lastEditedAt: created,
+    aspectRatio: '9:16',
+    durationInFrames: 150,
+    fps: 30,
+  };
+}
+
+function readProjectsIndex(): ServerProject[] {
+  try {
+    if (fs.existsSync(PROJECTS_INDEX_PATH)) {
+      const parsed = JSON.parse(fs.readFileSync(PROJECTS_INDEX_PATH, 'utf-8'));
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (err) {
+    console.warn('[Projects] Gagal membaca index:', err);
+  }
+  return [];
+}
+
+function writeProjectsIndex(projects: ServerProject[]): void {
+  try {
+    fs.writeFileSync(PROJECTS_INDEX_PATH, JSON.stringify(projects, null, 2), 'utf-8');
+  } catch (err) {
+    console.warn('[Projects] Gagal menyimpan index:', err);
+  }
+}
+
+function ensureProjectIndex(): void {
+  const projects = readProjectsIndex();
+  let changed = false;
+
+  // Register the legacy default project if it exists on disk.
+  if (fs.existsSync(ACTIVE_PROJECT_DIR) && !projects.some((p) => p.id === DEFAULT_PROJECT_ID)) {
+    projects.unshift(defaultProjectMeta());
+    changed = true;
+  }
+
+  // Discover project folders created outside the API.
+  try {
+    for (const entry of fs.readdirSync(PROJECTS_BASE, { withFileTypes: true })) {
+      if (!entry.isDirectory() || !isValidProjectId(entry.name)) continue;
+      if (projects.some((p) => p.id === entry.name)) continue;
+      const dir = projectDirFor(entry.name);
+      const stat = fs.statSync(dir);
+      projects.push({
+        id: entry.name,
+        name: entry.name,
+        createdAt: stat.birthtimeMs || stat.ctimeMs,
+        updatedAt: stat.mtimeMs,
+        lastEditedAt: stat.mtimeMs,
+        aspectRatio: '9:16',
+        durationInFrames: 150,
+        fps: 30,
+      });
+      changed = true;
+    }
+  } catch {}
+
+  if (changed) writeProjectsIndex(projects);
+}
+
+function ensureProjectFolders(dir: string): void {
+  [
+    dir,
+    path.join(dir, 'public', 'assets'),
+    path.join(dir, '.males_ngonten', 'chats'),
+    path.join(dir, '.males_ngonten', 'checkpoints'),
+    path.join(dir, 'src'),
+  ].forEach((d) => {
+    if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
+  });
+}
+
+function seedProjectFiles(dir: string, project: ServerProject): void {
+  const config = PROJECT_ASPECTS[project.aspectRatio] || PROJECT_ASPECTS['9:16'];
+  ensureProjectFolders(dir);
+
+  const timelineFile = path.join(dir, 'timeline.json');
+  if (!fs.existsSync(timelineFile)) {
+    const timeline = {
+      ...DEFAULT_TIMELINE,
+      width: config.width,
+      height: config.height,
+      fps: config.fps,
+      durationInFrames: config.durationInFrames,
+    };
+    fs.writeFileSync(timelineFile, JSON.stringify(timeline, null, 2), 'utf-8');
+  }
+
+  const assetsFile = path.join(dir, 'assets.json');
+  if (!fs.existsSync(assetsFile)) {
+    fs.writeFileSync(assetsFile, JSON.stringify([], null, 2), 'utf-8');
+  }
+
+  const rulesFile = path.join(dir, 'GEMINI.md');
+  if (!fs.existsSync(rulesFile)) {
+    fs.writeFileSync(rulesFile, DEFAULT_GEMINI_RULES, 'utf-8');
+  }
+
+  const compositionFile = path.join(dir, 'src', 'Composition.tsx');
+  if (!fs.existsSync(compositionFile) || fs.statSync(compositionFile).size === 0) {
+    fs.writeFileSync(compositionFile, DEFAULT_COMPOSITION, 'utf-8');
+  }
+}
+
+function setActiveProjectDir(id: string): boolean {
+  if (!isValidProjectId(id)) return false;
+  const dir = projectDirFor(id);
+  if (!fs.existsSync(dir)) return false;
+
+  ACTIVE_PROJECT_DIR = dir;
+  ASSETS_DIR = path.join(dir, 'public', 'assets');
+  CHATS_DIR = path.join(dir, '.males_ngonten', 'chats');
+  CHECKPOINTS_DIR = path.join(dir, '.males_ngonten', 'checkpoints');
+  CHECKPOINTS_INDEX_PATH = path.join(CHECKPOINTS_DIR, 'index.json');
+  timelinePath = path.join(dir, 'timeline.json');
+  assetsPath = path.join(dir, 'assets.json');
+  geminiRulesPath = path.join(dir, 'GEMINI.md');
+  compPath = path.join(dir, 'src', 'Composition.tsx');
+
+  ensureProjectFolders(dir);
+  ensureGitRepo();
+
+  // Load checkpoints belonging to the newly active project.
+  gitCheckpoints = [];
+  loadCheckpointsFromIndex();
+
+  // Reload chat sessions so history is isolated per project as well.
+  chatSessions = [];
+  loadChatSessionsFromDisk();
+  activeSessionId = chatSessions[0]?.id || null;
+  return true;
+}
+
+function readWorkspaceForProject(id: string) {
+  const dir = projectDirFor(id);
+  const config = PROJECT_ASPECTS['9:16'];
+  let timeline: any = { ...DEFAULT_TIMELINE, layers: [] };
+  let assets: any[] = [];
+  let files: Record<string, string> = {};
+  let settings: any = { aspectRatio: '9:16', fps: config.fps, durationInFrames: config.durationInFrames };
+
+  try {
+    const timelineFile = path.join(dir, 'timeline.json');
+    if (fs.existsSync(timelineFile)) {
+      timeline = JSON.parse(fs.readFileSync(timelineFile, 'utf-8'));
+      files['timeline.json'] = fs.readFileSync(timelineFile, 'utf-8');
+    }
+  } catch {}
+
+  try {
+    const assetsFile = path.join(dir, 'assets.json');
+    if (fs.existsSync(assetsFile)) assets = JSON.parse(fs.readFileSync(assetsFile, 'utf-8'));
+  } catch {}
+
+  try {
+    const rulesFile = path.join(dir, 'GEMINI.md');
+    if (fs.existsSync(rulesFile)) files['GEMINI.md'] = fs.readFileSync(rulesFile, 'utf-8');
+  } catch {}
+
+  try {
+    const compositionFile = path.join(dir, 'src', 'Composition.tsx');
+    if (fs.existsSync(compositionFile)) {
+      files['ShortVideoComposition.tsx'] = fs.readFileSync(compositionFile, 'utf-8');
+    }
+  } catch {}
+
+  const collectDir = (absolute: string, relative: string) => {
+    try {
+      if (!fs.existsSync(absolute)) return;
+      for (const entry of fs.readdirSync(absolute, { withFileTypes: true })) {
+        const abs = path.join(absolute, entry.name);
+        const rel = `${relative}/${entry.name}`;
+        if (entry.isDirectory()) collectDir(abs, rel);
+        else if (/\.(tsx?|jsx?|md|json|css)$/.test(entry.name)) {
+          files[rel] = fs.readFileSync(abs, 'utf-8');
+        }
+      }
+    } catch {}
+  };
+  collectDir(path.join(dir, 'src', 'components'), 'src/components');
+
+  const project = readProjectsIndex().find((p) => p.id === id);
+  settings = {
+    aspectRatio: project?.aspectRatio || '9:16',
+    fps: timeline?.fps || config.fps,
+    durationInFrames: timeline?.durationInFrames || config.durationInFrames,
+  };
+
+  return { timeline, assets, files, settings };
+}
+
+function writeWorkspaceForProject(id: string, body: any): boolean {
+  const dir = projectDirFor(id);
+  if (!fs.existsSync(dir)) return false;
+  ensureProjectFolders(dir);
+
+  try {
+    if (Array.isArray(body.assets)) {
+      fs.writeFileSync(path.join(dir, 'assets.json'), JSON.stringify(body.assets, null, 2), 'utf-8');
+    }
+
+    if (body.files && typeof body.files === 'object') {
+      for (const [fileName, content] of Object.entries(body.files)) {
+        if (typeof content !== 'string') continue;
+        if (fileName.includes('..')) continue;
+        let target: string;
+        if (fileName === 'ShortVideoComposition.tsx') target = path.join(dir, 'src', 'Composition.tsx');
+        else if (fileName === 'GEMINI.md') target = path.join(dir, 'GEMINI.md');
+        else if (fileName === 'timeline.json') target = path.join(dir, 'timeline.json');
+        else target = path.join(dir, fileName);
+        if (!target.startsWith(dir)) continue;
+        const targetDir = path.dirname(target);
+        if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
+        fs.writeFileSync(target, content, 'utf-8');
+      }
+    }
+
+    // Write the live timeline LAST so a stale files['timeline.json'] snapshot
+    // can never overwrite the authoritative timeline state.
+    if (body.timeline) {
+      fs.writeFileSync(path.join(dir, 'timeline.json'), JSON.stringify(body.timeline, null, 2), 'utf-8');
+      if (ACTIVE_PROJECT_DIR === dir) {
+        broadcastSSE('file_changed', { file: 'timeline.json', timeline: body.timeline });
+      }
+    }
+
+    const projects = readProjectsIndex();
+    const index = projects.findIndex((p) => p.id === id);
+    if (index !== -1) {
+      projects[index] = {
+        ...projects[index],
+        updatedAt: Date.now(),
+        lastEditedAt: Date.now(),
+        fps: body.timeline?.fps ?? projects[index].fps,
+        durationInFrames: body.timeline?.durationInFrames ?? projects[index].durationInFrames,
+      };
+      writeProjectsIndex(projects);
+    }
+    return true;
+  } catch (err) {
+    console.error('[Projects] Gagal menyimpan workspace:', err);
+    return false;
+  }
+}
+
+function copyProjectDir(source: string, destination: string): void {
+  if (!fs.existsSync(destination)) fs.mkdirSync(destination, { recursive: true });
+  for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
+    if (['.git', 'node_modules', 'out', '.males_ngonten'].includes(entry.name)) continue;
+    const src = path.join(source, entry.name);
+    const dest = path.join(destination, entry.name);
+    if (entry.isDirectory()) copyProjectDir(src, dest);
+    else fs.copyFileSync(src, dest);
+  }
+}
+
+ensureProjectIndex();
 
 // In-memory Render Jobs
 let renderJobs: {
@@ -2129,8 +2441,7 @@ Decision tree:
    → tambah/ubah clip & layer di timeline.json (modifyTimeline atau writeFile timeline.json).
 4. Ragu antara (1) dan (2): cek propsSchema komponen dulu; jika prop tersedia → jalur (1).
 
-PROJECT STRUCTURE:
-projects/proyek-remotion-1/
+PROJECT STRUCTURE (relative ke folder project aktif — jangan hardcode nama project):
 - timeline.json                    - Timeline definition (layers, clips, durations)
 - src/Composition.tsx              - Remotion video component (React TSX)
 - src/components/*.element.tsx     - Fork komponen library (boleh diedit AI)
@@ -3221,6 +3532,156 @@ app.get('/api/chats/search', (req, res) => {
     return titleMatch || previewMatch || messageMatch;
   });
   res.json({ sessions: results.map(toSessionSummary) });
+});
+
+// 7b. Project management API — real isolated project folders on disk
+app.get('/api/projects', (_req, res) => {
+  ensureProjectIndex();
+  const projects = readProjectsIndex().sort((a, b) => b.lastEditedAt - a.lastEditedAt);
+  res.json({ projects });
+});
+
+app.post('/api/projects', (req, res) => {
+  try {
+    const { name, aspectRatio, description, thumbnail } = req.body || {};
+    const requestedId = typeof req.body?.id === 'string' ? req.body.id : '';
+    const ratio = PROJECT_ASPECTS[aspectRatio] ? aspectRatio : '9:16';
+    let id = isValidProjectId(requestedId) ? requestedId : `proj_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+    if (fs.existsSync(projectDirFor(id))) {
+      id = `proj_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+    }
+
+    const now = Date.now();
+    const config = PROJECT_ASPECTS[ratio];
+    const project: ServerProject = {
+      id,
+      name: (typeof name === 'string' && name.trim()) || 'Project Baru',
+      description: typeof description === 'string' ? description : undefined,
+      thumbnail: typeof thumbnail === 'string' ? thumbnail : undefined,
+      createdAt: now,
+      updatedAt: now,
+      lastEditedAt: now,
+      aspectRatio: ratio,
+      durationInFrames: config.durationInFrames,
+      fps: config.fps,
+    };
+
+    const dir = projectDirFor(id);
+    seedProjectFiles(dir, project);
+
+    const projects = readProjectsIndex().filter((p) => p.id !== id);
+    projects.unshift(project);
+    writeProjectsIndex(projects);
+
+    res.json({ success: true, project });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/projects/:id/workspace', (req, res) => {
+  const { id } = req.params;
+  if (!isValidProjectId(id) || !fs.existsSync(projectDirFor(id))) {
+    return res.status(404).json({ error: 'Project not found' });
+  }
+  res.json(readWorkspaceForProject(id));
+});
+
+app.put('/api/projects/:id/workspace', (req, res) => {
+  const { id } = req.params;
+  if (!isValidProjectId(id)) return res.status(400).json({ error: 'Invalid project id' });
+  const ok = writeWorkspaceForProject(id, req.body || {});
+  if (!ok) return res.status(404).json({ error: 'Project not found' });
+  res.json({ success: true });
+});
+
+app.post('/api/projects/:id/activate', (req, res) => {
+  const { id } = req.params;
+  if (!setActiveProjectDir(id)) {
+    return res.status(404).json({ error: 'Project not found' });
+  }
+  const projects = readProjectsIndex();
+  const index = projects.findIndex((p) => p.id === id);
+  if (index !== -1) {
+    projects[index] = { ...projects[index], lastEditedAt: Date.now(), updatedAt: Date.now() };
+    writeProjectsIndex(projects);
+  }
+  res.json({ success: true, project: projects.find((p) => p.id === id) || null });
+});
+
+app.patch('/api/projects/:id', (req, res) => {
+  const { id } = req.params;
+  const projects = readProjectsIndex();
+  const index = projects.findIndex((p) => p.id === id);
+  if (index === -1) return res.status(404).json({ error: 'Project not found' });
+
+  const allowed = ['name', 'description', 'thumbnail', 'aspectRatio', 'fps', 'durationInFrames'];
+  const updates: any = {};
+  for (const key of allowed) {
+    if (req.body && req.body[key] !== undefined) updates[key] = req.body[key];
+  }
+
+  projects[index] = {
+    ...projects[index],
+    ...updates,
+    updatedAt: Date.now(),
+    lastEditedAt: Date.now(),
+  };
+  writeProjectsIndex(projects);
+  res.json({ success: true, project: projects[index] });
+});
+
+app.delete('/api/projects/:id', (req, res) => {
+  const { id } = req.params;
+  if (!isValidProjectId(id)) return res.status(400).json({ error: 'Invalid project id' });
+
+  const projects = readProjectsIndex().filter((p) => p.id !== id);
+  writeProjectsIndex(projects);
+
+  const dir = projectDirFor(id);
+  try {
+    if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+
+  if (ACTIVE_PROJECT_DIR === dir) {
+    if (projects.length > 0) setActiveProjectDir(projects[0].id);
+  }
+
+  res.json({ success: true });
+});
+
+app.post('/api/projects/:id/duplicate', (req, res) => {
+  try {
+    const { id } = req.params;
+    const source = readProjectsIndex().find((p) => p.id === id);
+    if (!source) return res.status(404).json({ error: 'Project not found' });
+
+    const now = Date.now();
+    const newId = `proj_${now}_${Math.random().toString(36).slice(2, 11)}`;
+    const name =
+      typeof req.body?.name === 'string' && req.body.name.trim()
+        ? req.body.name.trim()
+        : `${source.name} (Copy)`;
+
+    copyProjectDir(projectDirFor(id), projectDirFor(newId));
+
+    const project: ServerProject = {
+      ...source,
+      id: newId,
+      name,
+      createdAt: now,
+      updatedAt: now,
+      lastEditedAt: now,
+    };
+    const projects = readProjectsIndex();
+    projects.unshift(project);
+    writeProjectsIndex(projects);
+    res.json({ success: true, project });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // 8. GET /api/files & PUT /api/files/:filename

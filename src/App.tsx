@@ -31,6 +31,8 @@ import {
   loadSavedFilesState,
   FILES_STORAGE_KEY,
 } from './hooks/useAutoSaveWorkspace';
+import { ProjectDashboard } from './components/dashboard/ProjectDashboard';
+import { projectService, Project } from './services/ProjectService';
 import { X, Sparkles, MessageSquare } from 'lucide-react';
 
 const COMPOSITION_SAMPLE_CODE = `// ShortVideoComposition.tsx
@@ -62,7 +64,43 @@ export const ShortVideoComposition: React.FC = () => {
 };
 `;
 
+const DEFAULT_PROJECT_RULES =
+  '# ATURAN PROYEK MALES NGONTEN STUDIO\n1. Format 9:16 portrait (1080x1920)\n2. Pacing cepat 1.5 - 2.5 detik per klip\n3. Animasi spring dengan damping Remotion.';
+
+function createDefaultFiles(timeline: typeof INITIAL_STUDIO_TIMELINE): Record<string, string> {
+  return {
+    'ShortVideoComposition.tsx': COMPOSITION_SAMPLE_CODE,
+    'timeline.json': JSON.stringify(timeline, null, 2),
+    'GEMINI.md': DEFAULT_PROJECT_RULES,
+  };
+}
+
+function getAspectRatioFromTimeline(timeline: typeof INITIAL_STUDIO_TIMELINE): '9:16' | '16:9' | '1:1' | '4:5' {
+  const ratio = timeline.width / timeline.height;
+  if (Math.abs(ratio - 16 / 9) < 0.02) return '16:9';
+  if (Math.abs(ratio - 1) < 0.02) return '1:1';
+  if (Math.abs(ratio - 4 / 5) < 0.02) return '4:5';
+  return '9:16';
+}
+
 export default function App() {
+  // ------------------------------------------------------------
+  // Project management state (dashboard is the initial screen)
+  // ------------------------------------------------------------
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+  const [activeProject, setActiveProject] = useState<Project | null>(null);
+  const [showDashboard, setShowDashboard] = useState(true);
+  const [isLoadingProject, setIsLoadingProject] = useState(false);
+  const [loadedProjectId, setLoadedProjectId] = useState<string | null>(null);
+  const [pendingAIPrompt, setPendingAIPrompt] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem('males_studio_pending_prompt');
+    } catch {
+      return null;
+    }
+  });
+  const [pendingSendPrompt, setPendingSendPrompt] = useState<string | null>(null);
+
   const {
     timeline,
     setTimeline,
@@ -93,6 +131,8 @@ export default function App() {
     handleStopAgent,
     handleSwitchSession,
     handleNewChat,
+    refreshSessions,
+    resetChatForProject,
     handleRenameSession,
     handlePinSession,
     handleArchiveSession,
@@ -213,6 +253,50 @@ export default function App() {
     return () => { ro.disconnect(); mo.disconnect(); };
   }, []);
 
+  // Expose the real bottom-nav height (incl. Android safe area / keyboard)
+  useEffect(() => {
+    const updateBottomNavHeight = () => {
+      const baseNavHeight = 56;
+      const viewport = window.visualViewport;
+      if (viewport) {
+        const safeAreaBottom = Math.max(
+          0,
+          window.innerHeight - viewport.height - viewport.offsetTop
+        );
+        document.documentElement.style.setProperty(
+          '--bottom-nav-height',
+          `${baseNavHeight + safeAreaBottom}px`
+        );
+      } else {
+        const testEl = document.createElement('div');
+        testEl.style.position = 'fixed';
+        testEl.style.bottom = '0';
+        testEl.style.paddingBottom = 'env(safe-area-inset-bottom)';
+        testEl.style.visibility = 'hidden';
+        document.body.appendChild(testEl);
+        const safeAreaBottom = parseFloat(getComputedStyle(testEl).paddingBottom) || 0;
+        document.body.removeChild(testEl);
+        document.documentElement.style.setProperty(
+          '--bottom-nav-height',
+          `${baseNavHeight + safeAreaBottom}px`
+        );
+      }
+    };
+
+    updateBottomNavHeight();
+    window.visualViewport?.addEventListener('resize', updateBottomNavHeight);
+    window.visualViewport?.addEventListener('scroll', updateBottomNavHeight);
+    window.addEventListener('resize', updateBottomNavHeight);
+    window.addEventListener('orientationchange', updateBottomNavHeight);
+
+    return () => {
+      window.visualViewport?.removeEventListener('resize', updateBottomNavHeight);
+      window.visualViewport?.removeEventListener('scroll', updateBottomNavHeight);
+      window.removeEventListener('resize', updateBottomNavHeight);
+      window.removeEventListener('orientationchange', updateBottomNavHeight);
+    };
+  }, []);
+
   // Overlay sheets — Remotion Player stays visible behind these
   const [isChatSheetOpen, setIsChatSheetOpen] = useState<boolean>(false);
   const [isCodeSheetOpen, setIsCodeSheetOpen] = useState<boolean>(false);
@@ -244,8 +328,152 @@ export default function App() {
     })
   );
 
-  // Periodically save timeline & filesState to localStorage
-  useAutoSaveWorkspace(timeline, filesState, 5000);
+  // Periodically save timeline & filesState to localStorage (only once the
+  // active project's workspace has actually loaded, to avoid mirroring the
+  // previous project's timeline under the new project's key).
+  useAutoSaveWorkspace(
+    timeline,
+    filesState,
+    activeProjectId,
+    5000,
+    !activeProjectId || loadedProjectId === activeProjectId
+  );
+
+  // Keep a live snapshot for project workspace persistence without resetting
+  // timers on every timeline edit.
+  const workspaceRef = useRef({
+    projectId: activeProjectId,
+    timeline,
+    filesState,
+    assets,
+    activeProject,
+  });
+  workspaceRef.current = {
+    projectId: activeProjectId,
+    timeline,
+    filesState,
+    assets,
+    activeProject,
+  };
+
+  const saveProjectWorkspace = useCallback(async (projectId?: string) => {
+    const id = projectId || workspaceRef.current.projectId;
+    if (!id) return;
+    const snapshot = workspaceRef.current;
+    // Only timeline/assets/settings are persisted here. Files (composition,
+    // GEMINI.md, forked elements) are written explicitly by the code editor or
+    // by the AI agent — sending a stale filesState snapshot would clobber the
+    // agent's newer edits.
+    await projectService.saveProjectWorkspace(id, {
+      timeline: snapshot.timeline,
+      assets: snapshot.assets,
+      settings: {
+        aspectRatio:
+          snapshot.activeProject?.aspectRatio || getAspectRatioFromTimeline(snapshot.timeline),
+        fps: snapshot.timeline.fps,
+        durationInFrames: snapshot.timeline.durationInFrames,
+      },
+    });
+  }, []);
+
+  // Explicit file save from the code editor. Files are written individually so
+  // periodic timeline saves never overwrite newer AI-agent edits.
+  const handleSaveFile = useCallback(
+    async (fileName: string, content: string) => {
+      setFilesState((prev) => ({ ...prev, [fileName]: content }));
+
+      if (fileName === 'timeline.json') {
+        try {
+          const parsed = JSON.parse(content);
+          if (parsed?.layers) setTimeline(parsed);
+        } catch {
+          showToast('timeline.json tidak valid. Perubahan timeline tidak diterapkan.');
+        }
+      }
+
+      try {
+        const res = await fetch(`/api/files/${encodeURIComponent(fileName)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      } catch (e) {
+        console.error('Failed to save file:', e);
+        showToast(`Gagal menyimpan ${fileName} ke server.`);
+      }
+    },
+    [setTimeline, showToast]
+  );
+
+  // Load the isolated workspace whenever a project is opened.
+  useEffect(() => {
+    studioWorkspace.setProjectId(activeProjectId);
+
+    if (!activeProjectId) {
+      setLoadedProjectId(null);
+      return undefined;
+    }
+
+    let cancelled = false;
+    setIsLoadingProject(true);
+    setLoadedProjectId(null);
+    // Chat history is project-scoped too: drop the previous project's session
+    // before the new workspace is displayed.
+    resetChatForProject();
+
+    (async () => {
+      try {
+        const workspace = await projectService.loadProjectWorkspace(activeProjectId);
+        if (cancelled) return;
+
+        if (workspace) {
+          const nextTimeline = workspace.timeline || INITIAL_STUDIO_TIMELINE;
+          setTimeline(nextTimeline);
+          setAssets(workspace.assets || []);
+          setFilesState(
+            workspace.files && Object.keys(workspace.files).length
+              ? workspace.files
+              : createDefaultFiles(nextTimeline)
+          );
+        } else {
+          setTimeline(INITIAL_STUDIO_TIMELINE);
+          setAssets([]);
+          setFilesState(createDefaultFiles(INITIAL_STUDIO_TIMELINE));
+        }
+        setLoadedProjectId(activeProjectId);
+      } catch (e) {
+        console.error('Failed to load project workspace:', e);
+        if (!cancelled) {
+          showToast('Gagal memuat workspace project.');
+        }
+      } finally {
+        if (!cancelled) setIsLoadingProject(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeProjectId, setTimeline, setAssets, showToast, resetChatForProject]);
+
+  // Persist the active project workspace periodically.
+  useEffect(() => {
+    if (!activeProjectId || loadedProjectId !== activeProjectId) return undefined;
+    const interval = setInterval(() => {
+      saveProjectWorkspace(activeProjectId);
+    }, 10000);
+    return () => clearInterval(interval);
+  }, [activeProjectId, loadedProjectId, saveProjectWorkspace]);
+
+  // Debounced save after edits so a refresh/crash doesn't lose recent work.
+  useEffect(() => {
+    if (!activeProjectId || loadedProjectId !== activeProjectId) return undefined;
+    const timer = setTimeout(() => {
+      saveProjectWorkspace(activeProjectId);
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, [activeProjectId, loadedProjectId, timeline, filesState, assets, saveProjectWorkspace]);
 
   // Fork source komponen library ke workspace proyek (src/components/<slug>.element.tsx).
   // File inilah yang dibaca WorkspaceElement di preview dan boleh diedit AI.
@@ -374,6 +602,132 @@ export default function App() {
     [setAssets, showToast]
   );
 
+  // ------------------------------------------------------------
+  // Project management callbacks
+  // ------------------------------------------------------------
+  const handleOpenProject = useCallback(
+    async (projectId: string) => {
+      if (activeProjectId && activeProjectId !== projectId) {
+        await saveProjectWorkspace(activeProjectId);
+      }
+      const project = await projectService.getProject(projectId);
+      if (!project) {
+        showToast('Project tidak ditemukan.');
+        return;
+      }
+      await projectService.setActiveProject(projectId);
+      setActiveProject(project);
+      setActiveProjectId(projectId);
+      setShowDashboard(false);
+    },
+    [activeProjectId, saveProjectWorkspace, showToast]
+  );
+
+  const handleCreateProject = useCallback(
+    async (
+      name: string,
+      aspectRatio: '9:16' | '16:9' | '1:1' | '4:5',
+      description?: string
+    ) => {
+      const project = await projectService.createProject(name, aspectRatio, description);
+      await projectService.setActiveProject(project.id);
+      setActiveProject(project);
+      setActiveProjectId(project.id);
+      setShowDashboard(false);
+      showToast(`Project "${name}" dibuat.`);
+    },
+    [showToast]
+  );
+
+  const handleNewProjectWithPrompt = useCallback(
+    async (prompt: string, aspectRatio: '9:16' | '16:9' | '1:1' | '4:5' = '9:16') => {
+      const trimmed = prompt.trim();
+      if (!trimmed) return;
+
+      const aiConfigured = Boolean(agentSettings.apiBaseUrl && agentSettings.modelId);
+      if (!aiConfigured || !isBackendAvailable) {
+        try {
+          localStorage.setItem('males_studio_pending_prompt', trimmed);
+        } catch {}
+        setPendingAIPrompt(trimmed);
+        setShowDashboard(true);
+        setIsSettingsOpen(true);
+        return;
+      }
+
+      try {
+        const name = trimmed.length > 52 ? `${trimmed.slice(0, 52)}…` : trimmed;
+        const project = await projectService.createProject(name, aspectRatio, trimmed);
+        await projectService.setActiveProject(project.id);
+        setActiveProject(project);
+        setActiveProjectId(project.id);
+        setShowDashboard(false);
+        setPendingSendPrompt(trimmed);
+      } catch (e) {
+        console.error('Failed to create project with AI:', e);
+        showToast('Gagal membuat project AI. Silakan coba lagi.');
+      }
+    },
+    [agentSettings.apiBaseUrl, agentSettings.modelId, isBackendAvailable, showToast]
+  );
+
+  const handleReturnToDashboard = useCallback(async () => {
+    if (activeProjectId) {
+      await saveProjectWorkspace(activeProjectId);
+    }
+    projectService.clearActiveProject();
+    studioWorkspace.setProjectId(null);
+    setActiveProjectId(null);
+    setActiveProject(null);
+    setShowDashboard(true);
+  }, [activeProjectId, saveProjectWorkspace]);
+
+  const isAIConfigured = Boolean(agentSettings.apiBaseUrl && agentSettings.modelId);
+
+  // Auto-continue a prompt that was saved while AI was not configured yet.
+  useEffect(() => {
+    if (!pendingAIPrompt || !isAIConfigured || !isBackendAvailable || isSettingsOpen) {
+      return;
+    }
+    const prompt = pendingAIPrompt;
+    setPendingAIPrompt(null);
+    try {
+      localStorage.removeItem('males_studio_pending_prompt');
+    } catch {}
+    handleNewProjectWithPrompt(prompt);
+  }, [
+    pendingAIPrompt,
+    isAIConfigured,
+    isBackendAvailable,
+    isSettingsOpen,
+    handleNewProjectWithPrompt,
+  ]);
+
+  // Once the new project workspace has finished loading, run the saved prompt
+  // through the AI Agent exactly once.
+  useEffect(() => {
+    if (
+      !pendingSendPrompt ||
+      !activeProjectId ||
+      isLoadingProject ||
+      loadedProjectId !== activeProjectId
+    ) {
+      return undefined;
+    }
+    const prompt = pendingSendPrompt;
+    setPendingSendPrompt(null);
+    const timer = setTimeout(() => {
+      handleSendMessage(prompt, []);
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [
+    pendingSendPrompt,
+    activeProjectId,
+    isLoadingProject,
+    loadedProjectId,
+    handleSendMessage,
+  ]);
+
   const activeSession = sessions.find((s) => s.id === activeSessionId);
   const currentSec = (currentFrame / timeline.fps).toFixed(2);
   const totalAssetsSize = assets.reduce((sum, a) => sum + (a.size || 0), 0);
@@ -384,12 +738,103 @@ export default function App() {
     agentStatus === 'streaming' ||
     activeToolCalls.some((t) => t.status === 'running');
 
+  // Only one bottom-sheet panel may be active at a time.
+  const closeAllPanels = useCallback(() => {
+    setIsChatSheetOpen(false);
+    setIsCodeSheetOpen(false);
+    setIsAssetSheetOpen(false);
+    setIsStoryboardSheetOpen(false);
+    setIsElementSheetOpen(false);
+    setIsRenderOpen(false);
+    setIsAgentDrawerOpen(false);
+    setIsHistoryOpen(false);
+    setIsSettingsOpen(false);
+    setIsAiSettingsOpen(false);
+  }, []);
+
+  const toggleChatSheet = useCallback(() => {
+    setIsChatSheetOpen((prev) => {
+      if (!prev) closeAllPanels();
+      return !prev;
+    });
+  }, [closeAllPanels]);
+
+  const toggleCodeSheet = useCallback(() => {
+    setIsCodeSheetOpen((prev) => {
+      if (!prev) closeAllPanels();
+      return !prev;
+    });
+  }, [closeAllPanels]);
+
+  const toggleAssetSheet = useCallback(() => {
+    setIsAssetSheetOpen((prev) => {
+      if (!prev) closeAllPanels();
+      return !prev;
+    });
+  }, [closeAllPanels]);
+
+  const toggleStoryboardSheet = useCallback(() => {
+    setIsStoryboardSheetOpen((prev) => {
+      if (!prev) closeAllPanels();
+      return !prev;
+    });
+  }, [closeAllPanels]);
+
+  const toggleElementSheet = useCallback(() => {
+    setIsElementSheetOpen((prev) => {
+      if (!prev) closeAllPanels();
+      return !prev;
+    });
+  }, [closeAllPanels]);
+
+  const openSettings = useCallback(() => {
+    closeAllPanels();
+    setIsSettingsOpen(true);
+  }, [closeAllPanels]);
+
+  const openRender = useCallback(() => {
+    closeAllPanels();
+    setIsRenderOpen(true);
+  }, [closeAllPanels]);
+
+  const openHistory = useCallback(() => {
+    closeAllPanels();
+    setIsHistoryOpen(true);
+  }, [closeAllPanels]);
+
+  // Dashboard is the landing page. The studio is only rendered once a project
+  // has been opened, which keeps every project workspace isolated.
+  if (showDashboard || !activeProjectId) {
+    return (
+      <div className="w-full h-dvh max-h-dvh flex flex-col bg-[#09090b] text-[#f4f4f5] antialiased select-none font-sans">
+        <ProjectDashboard
+          onProjectSelect={handleOpenProject}
+          onNewProjectWithPrompt={handleNewProjectWithPrompt}
+          onOpenSettings={() => setIsSettingsOpen(true)}
+          isAIConfigured={isAIConfigured}
+          isBackendAvailable={isBackendAvailable}
+          isVisible={showDashboard || !activeProjectId}
+        />
+        <UnifiedSettingsSheet
+          isOpen={isSettingsOpen}
+          onClose={() => setIsSettingsOpen(false)}
+          settings={agentSettings}
+          onUpdateSettings={handleUpdateSettings}
+        />
+        <Toast open={!!toast} message={toast?.message ?? ''} onClose={hideToast} />
+      </div>
+    );
+  }
+
   return (
     <div className="w-full h-dvh max-h-dvh flex flex-col bg-[#09090b] text-[#f4f4f5] antialiased overflow-hidden select-none font-sans">
       {/* 1. Icon-Only Clean Header */}
       <Header
-        onOpenRender={() => setIsRenderOpen(true)}
+        onOpenRender={openRender}
         isRendering={!!currentRenderJob}
+        projectName={activeProject?.name}
+        onBackToDashboard={handleReturnToDashboard}
+        onOpenSettings={openSettings}
       />
 
       {/* 2. SPLIT LAYOUT: Remotion Player (atas) | Divider (drag) | AI Chat (bawah) */}
@@ -434,8 +879,11 @@ export default function App() {
         {/* AI Chat — area bawah, padding bawah agar input tidak menutupi Bottom Nav */}
         <div
           ref={chatWrapRef}
-          className={`flex-1 flex flex-col overflow-hidden relative pb-16`}
-          style={{ minHeight: 'var(--chat-min, 260px)' }}
+          className={`flex-1 flex flex-col overflow-hidden relative`}
+          style={{
+            minHeight: 'var(--chat-min, 260px)',
+            paddingBottom: 'var(--bottom-nav-height, 72px)',
+          }}
         >
           <div className="flex-1 min-h-0 overflow-hidden">
             <ChatPanel
@@ -456,9 +904,7 @@ export default function App() {
               selectedLayer={selectedLayer}
               onClearSelectedClip={() => handleSelectClip('', '')}
               prefilledPrompt={prefilledPrompt}
-              onOpenSettings={() => {
-                setIsSettingsOpen(true);
-              }}
+              onOpenSettings={openSettings}
               byokModelId={agentSettings.modelId}
               isByokConfigured={Boolean(agentSettings.apiBaseUrl && agentSettings.modelId)}
               streamingMessageId={streamingMessageId}
@@ -468,6 +914,7 @@ export default function App() {
               onLoadOlderMessages={handleLoadOlderMessages}
               totalMessages={messagesTotal}
               activeSessionId={activeSessionId}
+              timeline={timeline}
             />
           </div>
         </div>
@@ -476,7 +923,10 @@ export default function App() {
         {/* Timeline overlay (float on top of player, bottom area, draggable top edge) */}
         {isTimelineVisible && (
           <div
-            style={{ height: `${timelineHeight}px` }}
+            style={{
+              height: `${timelineHeight}px`,
+              bottom: 'var(--bottom-nav-height, 72px)',
+            }}
             className={`absolute bottom-[80px] left-0 right-0 flex flex-col overflow-hidden bg-gradient-to-b from-[#14141c]/95 to-[#0a0a0e]/95 backdrop-blur-md z-30 shadow-2xl ${
               isDraggingTimeline ? '' : 'transition-[height] duration-150 ease-out'
             }`}
@@ -606,9 +1056,7 @@ export default function App() {
             files={filesState}
             activeFile={activeFile}
             onSelectFile={(f) => setActiveFile(f)}
-            onSaveFile={(f, content) =>
-              setFilesState((prev) => ({ ...prev, [f]: content }))
-            }
+            onSaveFile={handleSaveFile}
             isAgentEditingFile={agentStatus !== 'idle'}
           />
         </div>
@@ -689,21 +1137,24 @@ export default function App() {
         onResetAll={() => {
           handleResetStudio();
           try {
-            localStorage.removeItem(FILES_STORAGE_KEY);
+            localStorage.removeItem(
+              activeProjectId
+                ? `males_studio_project_${activeProjectId}_files_state`
+                : FILES_STORAGE_KEY
+            );
           } catch {}
           setPrefilledPrompt('');
           setActiveFile('ShortVideoComposition.tsx');
-          setFilesState({
-            'ShortVideoComposition.tsx': COMPOSITION_SAMPLE_CODE,
-            'timeline.json': JSON.stringify(INITIAL_STUDIO_TIMELINE, null, 2),
-            'GEMINI.md': '# ATURAN PROYEK MALES NGONTEN STUDIO\n1. Format 9:16 portrait (1080x1920)\n2. Pacing cepat 1.5 - 2.5 detik per klip\n3. Animasi spring dengan damping Remotion.',
-          });
+          setFilesState(createDefaultFiles(timeline));
           setIsTimelineVisible(false);
           setIsChatSheetOpen(false);
           setIsRenderOpen(false);
           setIsAgentDrawerOpen(false);
           setIsHistoryOpen(false);
           setIsAiSettingsOpen(false);
+          if (activeProjectId) {
+            setTimeout(() => saveProjectWorkspace(activeProjectId), 0);
+          }
         }}
       />
 
@@ -746,23 +1197,23 @@ export default function App() {
       {/* 4. Fixed Bottom Navigation Bar — tombol fitur buka overlay sheet */}
       <BottomToolbar
         isChatOpen={isChatSheetOpen}
-        onToggleChat={() => setIsChatSheetOpen((prev) => !prev)}
+        onToggleChat={toggleChatSheet}
         isTimelineVisible={isTimelineVisible}
         onToggleTimeline={handleToggleTimeline}
         sessionsCount={sessions.length}
-        onOpenChatHistory={() => setIsHistoryOpen(true)}
+        onOpenChatHistory={openHistory}
         isHistoryOpen={isHistoryOpen}
-        onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenSettings={openSettings}
         isAiConfigured={Boolean(agentSettings.apiBaseUrl && agentSettings.modelId)}
         isBackendAvailable={isBackendAvailable}
         isCodeOpen={isCodeSheetOpen}
-        onToggleCode={() => setIsCodeSheetOpen((prev) => !prev)}
+        onToggleCode={toggleCodeSheet}
         isAssetOpen={isAssetSheetOpen}
-        onToggleAsset={() => setIsAssetSheetOpen((prev) => !prev)}
+        onToggleAsset={toggleAssetSheet}
         isStoryboardOpen={isStoryboardSheetOpen}
-        onToggleStoryboard={() => setIsStoryboardSheetOpen((prev) => !prev)}
+        onToggleStoryboard={toggleStoryboardSheet}
         isElementOpen={isElementSheetOpen}
-        onToggleElement={() => setIsElementSheetOpen((prev) => !prev)}
+        onToggleElement={toggleElementSheet}
       />
     </div>
   );

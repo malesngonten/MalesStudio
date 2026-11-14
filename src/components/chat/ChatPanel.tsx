@@ -23,7 +23,7 @@ import {
   Loader2,
 } from 'lucide-react';
 import { AgentMessage, AgentAttachment, AgentToolCall } from '../../contracts/agentProtocol';
-import { TimelineClip, TimelineLayer } from '../../types';
+import { TimelineClip, TimelineLayer, TimelineData } from '../../types';
 import { MessageBubble } from './MessageBubble';
 
 interface ChatPanelProps {
@@ -54,6 +54,8 @@ interface ChatPanelProps {
   totalMessages?: number;
   /** Used to reset scroll position when switching conversations. */
   activeSessionId?: string | null;
+  /** Timeline data for contextual prompt suggestions */
+  timeline?: TimelineData;
 }
 
 const AI_DIRECTOR_PROMPTS = [
@@ -65,37 +67,122 @@ const AI_DIRECTOR_PROMPTS = [
   '📝 Tambahkan teks subtitle bold di tengah',
 ];
 
-const getContextualPrompts = (clip?: TimelineClip | null): string[] => {
-  if (!clip) return AI_DIRECTOR_PROMPTS;
-  if (clip.elementSlug === 'achievement-pop') {
+// Expanded contextual prompts for different project states
+const PROJECT_PROMPTS: Record<string, string[]> = {
+  empty: [
+    '🎬 Buat video baru dengan tema tech review',
+    '📱 Bikin konten Shorts/Reels format 9:16',
+    '🎨 Desain intro channel dengan logo & musik',
+    '📊 Buat video presentasi data visualisasi',
+  ],
+  hasTimeline: [
+    '⚡ Percepat pacing video jadi 1.5x',
+    '🎵 Tambah background music lo-fi beat',
+    '🔄 Tambah transisi smooth antar klip',
+    '📝 Tambah subtitle otomatis untuk semua narasi',
+    '🎨 Ubah color grading jadi cinematic teal-orange',
+    '✂️ Potong bagian yang tidak perlu di timeline',
+  ],
+  hasElements: [
+    '✨ Tambah animasi pop-in untuk elemen achievement',
+    '🎯 Buat CTA button animate di akhir video',
+    '📊 Tambah counter animasi angka (0 ke 100K)',
+    '💫 Tambah particle effect di background',
+  ],
+  hasTextClips: [
+    '✏️ Ganti semua font jadi Space Grotesk bold',
+    '🎨 Gradient teks merah-putih untuk headline',
+    '💫 Animasi teks ketik (typewriter) per karakter',
+    '📍 Pindahkan subtitle ke safe zone 9:16',
+  ],
+  hasVideoClips: [
+    '🎬 Trim klip video di frame 30-90',
+    '⚡ Speed up video 2x untuk timelapse',
+    '🔄 Reverse klip video untuk efek rewind',
+    '🎨 Overlay gradient hitam 40% untuk kontras teks',
+  ],
+};
+
+const getContextualPrompts = (
+  clip?: TimelineClip | null,
+  projectContext?: {
+    hasTimeline: boolean;
+    hasElements: boolean;
+    hasTextClips: boolean;
+    hasVideoClips: boolean;
+    messageCount: number;
+  }
+): string[] => {
+  // Clip-specific prompts (highest priority)
+  if (clip) {
+    if (clip.elementSlug === 'achievement-pop') {
+      return [
+        '🎨 Ganti warna aksen ke emas',
+        '⚡ Percepat durasi animasi 1.5x',
+        '🏆 Ubah milestone jadi 100K Followers & 5000 XP',
+        '🌓 Ubah tema ke mode light',
+      ];
+    }
+    if (clip.elementSlug) {
+      return [
+        `🎨 Ganti palet warna ${clip.name}`,
+        `⚡ Percepat animasi ${clip.name}`,
+        `✏️ Edit teks dan judul ${clip.name}`,
+        `✨ Tambahkan efek visual pada ${clip.name}`,
+      ];
+    }
+    if (clip.props?.text !== undefined) {
+      return [
+        '✏️ Ubah teks headline',
+        '🔍 Besarkan font jadi 52px',
+        '🎨 Ganti warna teks jadi merah neon',
+        '💫 Ganti animasi teks jadi bounce',
+      ];
+    }
     return [
-      '🎨 Ganti warna aksen ke emas',
-      '⚡ Percepat durasi animasi 1.5x',
-      '🏆 Ubah milestone jadi 100K Followers & 5000 XP',
-      '🌓 Ubah tema ke mode light',
+      `🎨 Ubah tampilan ${clip.name}`,
+      `⚡ Percepat durasi ${clip.name}`,
+      `🎬 Pindahkan posisi ${clip.name}`,
     ];
   }
-  if (clip.elementSlug) {
-    return [
-      `🎨 Ganti palet warna ${clip.name}`,
-      `⚡ Percepat animasi ${clip.name}`,
-      `✏️ Edit teks dan judul ${clip.name}`,
-      `✨ Tambahkan efek visual pada ${clip.name}`,
-    ];
+
+  // Project-level contextual prompts based on current state
+  if (projectContext) {
+    const { hasTimeline, hasElements, hasTextClips, hasVideoClips, messageCount } = projectContext;
+
+    // New conversation - show project starters
+    if (messageCount === 0 && !hasTimeline) {
+      return PROJECT_PROMPTS.empty;
+    }
+
+    // Build contextual suggestions based on what exists
+    const suggestions: string[] = [];
+
+    if (hasTimeline) {
+      suggestions.push(...PROJECT_PROMPTS.hasTimeline.slice(0, 3));
+    }
+    if (hasElements) {
+      suggestions.push(...PROJECT_PROMPTS.hasElements.slice(0, 2));
+    }
+    if (hasTextClips) {
+      suggestions.push(...PROJECT_PROMPTS.hasTextClips.slice(0, 2));
+    }
+    if (hasVideoClips) {
+      suggestions.push(...PROJECT_PROMPTS.hasVideoClips.slice(0, 2));
+    }
+
+    // Always include a few general enhancements
+    if (suggestions.length < 6) {
+      suggestions.push(
+        '🎯 Optimasi video untuk TikTok/Reels algorithm',
+        '📤 Siapkan render 1080p untuk upload'
+      );
+    }
+
+    return suggestions.slice(0, 6);
   }
-  if (clip.props?.text !== undefined) {
-    return [
-      '✏️ Ubah teks headline',
-      '🔍 Besarkan font jadi 52px',
-      '🎨 Ganti warna teks jadi merah neon',
-      '💫 Ganti animasi teks jadi bounce',
-    ];
-  }
-  return [
-    `🎨 Ubah tampilan ${clip.name}`,
-    `⚡ Percepat durasi ${clip.name}`,
-    `🎬 Pindahkan posisi ${clip.name}`,
-  ];
+
+  return AI_DIRECTOR_PROMPTS;
 };
 
 export const ChatPanel: React.FC<ChatPanelProps> = ({
@@ -118,6 +205,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   streamingMessageId = null,
   activeToolCalls = [],
   hasMoreMessages = false,
+  timeline,
   isLoadingOlderMessages = false,
   onLoadOlderMessages,
   totalMessages = 0,
@@ -330,6 +418,35 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
   const toggleToolExpand = (toolId: string) => {
     setExpandedTools((prev) => ({ ...prev, [toolId]: !prev[toolId] }));
+  };
+
+  // Calculate project context for contextual prompt suggestions
+  const projectContext = React.useMemo(() => {
+    const hasTimeline = timeline && timeline.layers.length > 0;
+    const hasElements = timeline?.layers.some((l) => l.type === 'element' || l.clips.some((c) => c.elementSlug)) ?? false;
+    const hasTextClips = timeline?.layers.some((l) => l.type === 'text') ?? false;
+    const hasVideoClips = timeline?.layers.some((l) => l.type === 'video') ?? false;
+    return {
+      hasTimeline: !!hasTimeline,
+      hasElements: !!hasElements,
+      hasTextClips: !!hasTextClips,
+      hasVideoClips: !!hasVideoClips,
+      messageCount: messages.length,
+    };
+  }, [timeline, messages.length]);
+
+  // Handler for suggestion chip click - populates composer instead of sending
+  const handleSuggestionClick = (prompt: string) => {
+    setInputText(prompt);
+    textareaRef.current?.focus();
+    // Auto-expand if needed
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      const scrollH = textareaRef.current.scrollHeight;
+      const expanded = prompt.includes('\n') || scrollH > 40;
+      setIsMultiLine(expanded);
+      textareaRef.current.style.height = expanded ? `${Math.min(scrollH, 140)}px` : 'auto';
+    }
   };
 
   return (
@@ -550,11 +667,11 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       {/* Modern Contextual Suggestion Chips + Input — fixed bottom block, ukuran diukur dari DOM */}
       <div data-chat-anchor className="shrink-0">
         <div className="px-4 py-1.5 flex items-center gap-2 overflow-x-auto no-scrollbar shrink-0 bg-gradient-to-r from-[#0d0d12] via-[#09090c] to-[#0d0d12]">
-          {getContextualPrompts(selectedClip).map((prompt, idx) => (
+          {getContextualPrompts(selectedClip, projectContext).map((prompt, idx) => (
             <button
               key={idx}
               type="button"
-              onClick={() => onSendMessage(prompt, [])}
+              onClick={() => handleSuggestionClick(prompt)}
               disabled={isAgentWorking}
               className="tap whitespace-nowrap text-xs font-medium px-3.5 py-1.5 rounded-full bg-gradient-to-r from-zinc-850 to-zinc-800 hover:from-zinc-800 hover:to-zinc-750 text-zinc-200 hover:text-white transition-all shrink-0 disabled:opacity-40 active:scale-95 shadow-sm"
             >

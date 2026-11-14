@@ -127,6 +127,16 @@
   padding-bottom: max(12px, env(safe-area-inset-bottom));
 }
 
+:root {
+  --safe-area-bottom: env(safe-area-inset-bottom);
+}
+
+@supports (padding-bottom: env(safe-area-inset-bottom)) {
+  :root {
+    --safe-area-bottom: env(safe-area-inset-bottom);
+  }
+}
+
 .no-scrollbar::-webkit-scrollbar {
   display: none;
 }
