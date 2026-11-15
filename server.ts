@@ -267,112 +267,14 @@ function restoreGitCheckpoint(hash: string) {
 // Default timeline.json
 const DEFAULT_TIMELINE = {
   fps: 30,
-  durationInFrames: 150, // 5 seconds
+  durationInFrames: 150, // 5 detik — durasi awal, bisa diubah lewat chat
   width: 1080,
   height: 1920,
-  layers: [
-    {
-      id: 'layer-video',
-      type: 'video',
-      name: 'Video Background',
-      clips: [
-        {
-          id: 'clip-v1',
-          name: 'Cyber Studio Gradient',
-          from: 0,
-          duration: 150,
-          props: {
-            backgroundColor: 'radial-gradient(circle at 50% 40%, #201315 0%, #0d0c10 100%)',
-          },
-        },
-      ],
-    },
-    {
-      id: 'layer-element',
-      type: 'element',
-      name: 'Elemen Remocn',
-      clips: [
-        {
-          id: 'clip-el-achievement-1',
-          name: 'Achievement Pop',
-          from: 0,
-          duration: 150,
-          elementSlug: 'achievement-pop',
-          elementProps: {
-            achievements: [
-              { label: 'Milestone', title: '10K Subscribers', points: 1000, icon: 'trophy' },
-              { label: 'Viral Hit', title: '100K Views in 24h', points: 2500, icon: 'bolt' },
-              { label: 'Creator Pro', title: 'Top Trending Video', points: 5000, icon: 'star' },
-            ],
-            accent: '#e5484d',
-            theme: 'dark',
-            speed: 1,
-          },
-          props: {
-            text: 'Achievement Pop',
-            accent: '#e5484d',
-          },
-        },
-      ],
-    },
-    {
-      id: 'layer-text',
-      type: 'text',
-      name: 'Teks & Headline',
-      clips: [
-        {
-          id: 'clip-t1',
-          name: 'Headline Viral',
-          from: 5,
-          duration: 60,
-          props: {
-            text: 'Males Ngonten Studio 🐱',
-            fontSize: 42,
-            color: '#ffffff',
-            y: 18,
-            x: 50,
-            animation: 'slide-up',
-          },
-        },
-      ],
-    },
-    {
-      id: 'layer-narration',
-      type: 'narration',
-      name: 'Narasi Suara',
-      clips: [
-        {
-          id: 'clip-n1',
-          name: 'Voiceover Hook',
-          from: 15,
-          duration: 120,
-          props: {
-            text: '"Gak sempat ngedit? AI agent ini yang coding videonya!"',
-            speaker: 'Studio Voice',
-          },
-        },
-      ],
-    },
-    {
-      id: 'layer-music',
-      type: 'music',
-      name: 'Musik Beat',
-      clips: [
-        {
-          id: 'clip-m1',
-          name: 'Lo-Fi Chill Beat',
-          from: 0,
-          duration: 150,
-          props: {
-            volume: 0.8,
-          },
-        },
-      ],
-    },
-  ],
+  // Project baru selalu mulai dari kanvas kosong: tanpa layer, klip, atau
+  // komponen contoh. Semua isi kanvas dibuat lewat percakapan di panel chat.
+  layers: [],
 };
 
-// Default assets.json
 const DEFAULT_ASSETS = [
   {
     id: 'asset-logo-brand',
@@ -426,30 +328,15 @@ const DEFAULT_GEMINI_RULES = `# ATURAN PROYEK MALES NGONTEN STUDIO (GEMINI.md)
 `;
 
 const DEFAULT_COMPOSITION = `// ShortVideoComposition.tsx
-// Powered by Remotion v4.0 & Males Ngonten Studio AI Agent
+// Project baru dimulai dari kanvas kosong.
+// Komponen video dibuat oleh AI agent lewat percakapan di panel chat.
 
 import React from 'react';
-import { AbsoluteFill, useCurrentFrame, useVideoConfig } from 'remotion';
+import { AbsoluteFill } from 'remotion';
 
 export const ShortVideoComposition: React.FC = () => {
-  const frame = useCurrentFrame();
-  const { fps } = useVideoConfig();
-
   return (
-    <AbsoluteFill className="bg-black select-none overflow-hidden font-sans">
-      {/* Dynamic Background */}
-      <div className="absolute inset-0 bg-gradient-to-b from-[#201315] to-[#0d0c10]" />
-      
-      {/* Title */}
-      <div className="absolute inset-0 flex flex-col items-center justify-center p-8 text-center">
-        <h1 className="text-4xl font-extrabold text-white tracking-tight drop-shadow-lg">
-          Males Ngonten Studio 🐱
-        </h1>
-        <p className="text-xl text-[#e5484d] font-semibold mt-4">
-          AI Coding Agent Video Engine
-        </p>
-      </div>
-    </AbsoluteFill>
+    <AbsoluteFill style={{ backgroundColor: '#000000' }} />
   );
 };
 `;
@@ -462,7 +349,7 @@ if (!fs.existsSync(timelinePath)) {
 
 let assetsPath = path.join(ACTIVE_PROJECT_DIR, 'assets.json');
 if (!fs.existsSync(assetsPath)) {
-  fs.writeFileSync(assetsPath, JSON.stringify(DEFAULT_ASSETS, null, 2), 'utf-8');
+  fs.writeFileSync(assetsPath, JSON.stringify([], null, 2), 'utf-8');
 }
 
 let geminiRulesPath = path.join(ACTIVE_PROJECT_DIR, 'GEMINI.md');

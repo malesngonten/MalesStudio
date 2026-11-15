@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { Player, PlayerRef } from '@remotion/player';
-import { Play, Pause, Maximize2, RotateCcw, Layers, RefreshCw } from 'lucide-react';
+import { Play, Pause, Maximize2, RotateCcw, Layers, RefreshCw, MessageSquare } from 'lucide-react';
 import { TimelineData, TimelineClip } from '../../types';
 import { ShortVideoComposition } from '../../remotion/ShortVideoComposition';
 import { AspectRatioType, ASPECT_RATIOS } from '../../state/useStudioState';
@@ -530,6 +530,24 @@ export const RemotionPreview: React.FC<RemotionPreviewProps> = ({
               autoPlay={false}
               loop
             />
+
+            {/* Empty canvas state — arahkan user ke panel chat */}
+            {!timeline.layers?.some((l) => (l.clips?.length ?? 0) > 0) && (
+              <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 px-6 text-center pointer-events-none select-none">
+                <div
+                  className="w-11 h-11 rounded-2xl flex items-center justify-center mb-1"
+                  style={{ backgroundColor: 'rgba(255,255,255,0.06)' }}
+                >
+                  <MessageSquare className="w-5 h-5" style={{ color: '#a1a1aa' }} />
+                </div>
+                <p className="text-[15px] font-medium" style={{ color: '#e4e4e7' }}>
+                  Kanvas masih kosong
+                </p>
+                <p className="text-[12px] leading-relaxed max-w-[240px]" style={{ color: '#71717a' }}>
+                  Tulis ide videomu di panel chat di bawah. AI akan menyusun scene pertama di kanvas ini.
+                </p>
+              </div>
+            )}
 
             {/* Interactive On-Canvas Selection for Active Element Clips */}
             {!isPlaying &&

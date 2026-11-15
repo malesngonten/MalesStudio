@@ -2,115 +2,19 @@
  * Shared initial studio timeline & default assets.
  * Kept in a standalone module to avoid circular imports between the project
  * service, workspace service, and studio state hook.
+ *
+ * Project baru selalu dimulai dari kanvas kosong — tanpa layer, klip, atau
+ * komponen contoh. Semua isi kanvas dibuat lewat percakapan di panel chat.
  */
 
 import type { ProjectAsset, TimelineData } from '../types';
 
 export const INITIAL_STUDIO_TIMELINE: TimelineData = {
   fps: 30,
-  durationInFrames: 150, // 5 seconds
+  durationInFrames: 150, // 5 detik — durasi awal, bisa diubah lewat chat
   width: 1080,
   height: 1920,
-  layers: [
-    {
-      id: 'layer-video',
-      type: 'video',
-      name: 'Video Background',
-      clips: [
-        {
-          id: 'clip-v1',
-          name: 'Cyber Studio Gradient',
-          from: 0,
-          duration: 150,
-          props: {
-            backgroundColor: 'radial-gradient(circle at 50% 40%, #201315 0%, #0d0c10 100%)',
-          },
-        },
-      ],
-    },
-    {
-      id: 'layer-element',
-      type: 'element',
-      name: 'Elemen Remocn',
-      clips: [
-        {
-          id: 'clip-el-achievement-1',
-          name: 'Achievement Pop',
-          from: 0,
-          duration: 150,
-          elementSlug: 'achievement-pop',
-          elementProps: {
-            achievements: [
-              { label: 'Milestone', title: '10K Subscribers', points: 1000, icon: 'trophy' },
-              { label: 'Viral Hit', title: '100K Views in 24h', points: 2500, icon: 'bolt' },
-              { label: 'Creator Pro', title: 'Top Trending Video', points: 5000, icon: 'star' },
-            ],
-            accent: '#e5484d',
-            theme: 'dark',
-            speed: 1,
-          },
-          props: {
-            text: 'Achievement Pop',
-            accent: '#e5484d',
-          },
-        },
-      ],
-    },
-    {
-      id: 'layer-text',
-      type: 'text',
-      name: 'Teks & Headline',
-      clips: [
-        {
-          id: 'clip-t1',
-          name: 'Headline Viral',
-          from: 5,
-          duration: 60,
-          props: {
-            text: 'Males Ngonten Studio 🐱',
-            fontSize: 42,
-            color: '#ffffff',
-            y: 18,
-            x: 50,
-            animation: 'slide-up',
-          },
-        },
-      ],
-    },
-    {
-      id: 'layer-narration',
-      type: 'narration',
-      name: 'Narasi Suara',
-      clips: [
-        {
-          id: 'clip-n1',
-          name: 'Voiceover Hook',
-          from: 10,
-          duration: 130,
-          props: {
-            text: '"Gak sempat ngedit? AI agent ini yang coding videonya!"',
-            speaker: 'Studio Voice',
-          },
-        },
-      ],
-    },
-    {
-      id: 'layer-music',
-      type: 'music',
-      name: 'Musik Beat',
-      clips: [
-        {
-          id: 'clip-m1',
-          name: 'Lo-Fi Chill Beat',
-          from: 0,
-          duration: 150,
-          props: {
-            volume: 0.8,
-          },
-        },
-      ],
-    },
-  ],
+  layers: [],
 };
 
 export const DEFAULT_ASSETS: ProjectAsset[] = [

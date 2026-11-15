@@ -6,7 +6,8 @@
 
 import React from 'react';
 import { Composition, registerRoot } from 'remotion';
-import { ShortVideoComposition } from '../projects/proyek-remotion-1/src/Composition';
+import { ShortVideoComposition } from './remotion/ShortVideoComposition';
+import { INITIAL_STUDIO_TIMELINE } from './state/initialTimeline';
 
 export const RemotionRoot: React.FC = () => {
   return (
@@ -18,7 +19,7 @@ export const RemotionRoot: React.FC = () => {
         fps={30}
         width={1080}
         height={1920}
-        defaultProps={{}}
+        defaultProps={{ timeline: INITIAL_STUDIO_TIMELINE }}
       />
     </>
   );

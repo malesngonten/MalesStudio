@@ -54,25 +54,15 @@ const deduplicateMessages = (msgs: AgentMessage[]): AgentMessage[] => {
 };
 
 export function useStudioState() {
-  const [timeline, setTimeline] = useState<TimelineData>(() => {
-    try {
-      const saved = localStorage.getItem('males_ngonten_timeline');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed?.layers?.some((l: any) => l.type === 'element' || l.clips?.some((c: any) => c.elementSlug))) {
-          return parsed;
-        }
-      }
-    } catch (e) {
-      // fallback
-    }
-    return INITIAL_STUDIO_TIMELINE;
-  });
+  // Kanvas selalu mulai kosong; isi workspace project dimuat setelah project
+  // aktif dibuka (lihat App.tsx). Jangan memulihkan timeline demo dari
+  // localStorage karena akan memunculkan komponen contoh di project baru.
+  const [timeline, setTimeline] = useState<TimelineData>(() => INITIAL_STUDIO_TIMELINE);
 
   const [currentFrame, setCurrentFrame] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [selectedClipId, setSelectedClipId] = useState<string | null>('clip-el-achievement-1');
-  const [selectedLayerId, setSelectedLayerId] = useState<string | null>('layer-element');
+  const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
+  const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
   const [splitMode, setSplitMode] = useState<
     '50-50' | 'player-focus' | 'canvas-full' | 'chat-focus'
   >('50-50');

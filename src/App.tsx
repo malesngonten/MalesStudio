@@ -40,30 +40,15 @@ import { projectService, Project } from './services/ProjectService';
 import { X, Sparkles, MessageSquare, Trash2 } from 'lucide-react';
 
 const COMPOSITION_SAMPLE_CODE = `// ShortVideoComposition.tsx
-// Powered by Remotion v4.0 & Males Ngonten Studio AI Agent
+// Project baru dimulai dari kanvas kosong.
+// Komponen video dibuat oleh AI agent lewat percakapan di panel chat.
 
 import React from 'react';
-import { AbsoluteFill, useCurrentFrame, useVideoConfig } from 'remotion';
+import { AbsoluteFill } from 'remotion';
 
 export const ShortVideoComposition: React.FC = () => {
-  const frame = useCurrentFrame();
-  const { fps } = useVideoConfig();
-
   return (
-    <AbsoluteFill className="bg-black select-none overflow-hidden font-sans">
-      {/* Dynamic Ambient Background */}
-      <div className="absolute inset-0 bg-gradient-to-b from-[#201315] to-[#0d0c10]" />
-      
-      {/* Title */}
-      <div className="absolute inset-0 flex flex-col items-center justify-center p-8 text-center">
-        <h1 className="text-4xl font-extrabold text-white tracking-tight drop-shadow-lg">
-          Males Ngonten Studio 🐱
-        </h1>
-        <p className="text-xl text-[#e5484d] font-semibold mt-4">
-          AI Coding Agent Video Engine
-        </p>
-      </div>
-    </AbsoluteFill>
+    <AbsoluteFill style={{ backgroundColor: '#000000' }} />
   );
 };
 `;

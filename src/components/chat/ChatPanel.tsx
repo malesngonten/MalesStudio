@@ -566,14 +566,14 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             </div>
 
             <h2 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight leading-tight">
-              Build your video <br />
+              Ceritakan ide videomu <br />
               <span className="bg-gradient-to-r from-red-400 via-rose-300 to-white bg-clip-text text-transparent">
-                with AI Studio
+                mulai dari chat
               </span>
             </h2>
 
             <p className="text-xs sm:text-sm text-zinc-400 max-w-xs leading-relaxed">
-              Tulis instruksi dalam bahasa Indonesia untuk mengubah teks, durasi, animasi, dan musik Remotion secara langsung.
+              Kanvas masih kosong. Tulis prompt di bawah untuk membuat scene pertama — AI akan menyusun teks, animasi, dan musiknya.
             </p>
           </div>
         )}

@@ -285,7 +285,7 @@ class ProjectService {
       timeline,
       assets: [],
       files: {
-        'ShortVideoComposition.tsx': `// ShortVideoComposition.tsx\n// Powered by Remotion v4.0 & Males Ngonten Studio AI Agent\n\nimport React from 'react';\nimport { AbsoluteFill, useCurrentFrame, useVideoConfig } from 'remotion';\n\nexport const ShortVideoComposition: React.FC = () => {\n  const frame = useCurrentFrame();\n  const { fps } = useVideoConfig();\n\n  return (\n    <AbsoluteFill className="bg-black select-none overflow-hidden font-sans">\n      <div className="absolute inset-0 bg-gradient-to-b from-[#201315] to-[#0d0c10]" />\n      <div className="absolute inset-0 flex flex-col items-center justify-center p-8 text-center">\n        <h1 className="text-4xl font-extrabold text-white tracking-tight drop-shadow-lg">\n          ${project.name}\n        </h1>\n        <p className="text-xl text-[#e5484d] font-semibold mt-4">\n          AI Coding Agent Video Engine\n        </p>\n      </div>\n    </AbsoluteFill>\n  );\n};`,
+        'ShortVideoComposition.tsx': `// ShortVideoComposition.tsx\n// Project baru dimulai dari kanvas kosong.\n// Komponen video dibuat oleh AI agent lewat percakapan di panel chat.\n\nimport React from 'react';\nimport { AbsoluteFill } from 'remotion';\n\nexport const ShortVideoComposition: React.FC = () => {\n  return (\n    <AbsoluteFill style={{ backgroundColor: '#000000' }} />\n  );\n};`,
         'timeline.json': JSON.stringify(timeline, null, 2),
         'GEMINI.md':
           '# ATURAN PROYEK MALES NGONTEN STUDIO\n1. Format 9:16 portrait (1080x1920)\n2. Pacing cepat 1.5 - 2.5 detik per klip\n3. Animasi spring dengan damping Remotion.',
