@@ -309,3 +309,40 @@ export interface WebResearchResult {
   error?: string;
 }
 
+/* ========================================================
+ * REPOSITORY RESEARCH TYPES
+ * Digunakan AI agent untuk mengakses, memahami, dan mengintegrasikan
+ * source code dari repository eksternal (GitHub, dll.) ke dalam
+ * project Remotion aktif.
+ * ======================================================== */
+
+export interface RepoFileInfo {
+  path: string;
+  type: 'file' | 'directory';
+  size?: number;
+  language?: string;
+}
+
+export interface RepoResearchResult {
+  repoUrl: string;
+  repoName: string;
+  localPath: string;
+  files: RepoFileInfo[];
+  readme?: string;
+  skillMd?: string;
+  structure: string;
+  error?: string;
+}
+
+export interface RepoReadResult {
+  path: string;
+  content: string;
+  size: number;
+  error?: string;
+}
+
+export interface RepoResearchOptions {
+  maxFiles?: number;
+  maxFileSize?: number;
+}
+
