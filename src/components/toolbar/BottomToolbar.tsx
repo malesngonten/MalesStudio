@@ -129,7 +129,7 @@ export const BottomToolbar: React.FC<BottomToolbarProps> = ({
               onClick={tab.onClick}
               aria-label={tab.label}
               aria-pressed={tab.active}
-              className={`tap shrink-0 min-w-[44px] h-[48px] flex flex-col items-center justify-center gap-1 px-1.5 transition-all duration-300 outline-none relative ${
+              className={`shrink-0 min-w-[44px] h-[48px] flex flex-col items-center justify-center gap-1 px-1.5 transition-all duration-300 outline-none relative ${
                 tab.active
                   ? `text-[#E8102D]`
                   : `text-[#8A8A94]`
