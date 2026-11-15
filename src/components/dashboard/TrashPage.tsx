@@ -1,10 +1,10 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ChevronLeft,
   Trash2,
   RotateCcw,
   Loader2,
-  AlertTriangle,
   MoreVertical,
 } from 'lucide-react';
 import { projectService, Project } from '../../services/ProjectService';
@@ -16,6 +16,11 @@ const ASPECT_RATIO_CONFIG: Record<string, { width: number; height: number }> = {
   '1:1': { width: 1080, height: 1080 },
   '4:5': { width: 1080, height: 1350 },
 };
+
+const MENU_WIDTH = 176;
+const MENU_HEIGHT = 116;
+const MENU_GAP = 6;
+const VIEWPORT_MARGIN = 8;
 
 interface TrashPageProps {
   onBack: () => void;
@@ -53,12 +58,13 @@ function getDaysUntilPermanentDelete(deletedAt: number | null): number {
 
 /**
  * Dropdown menu floating di dekat tombol 3-titik.
- * Menutup otomatis saat klik di luar atau ESC.
+ * Dirender lewat portal ke <body> supaya tidak terpotong overflow / stacking context halaman.
+ * Menutup otomatis saat klik di luar, ESC, scroll, atau resize.
  */
 interface DropdownMenuProps {
   isOpen: boolean;
   onClose: () => void;
-  triggerRef: React.RefObject<HTMLButtonElement | null>;
+  triggerRect: DOMRect | null;
   project: Project;
   onRestore: () => void;
   onPermanentDelete: () => void;
@@ -67,7 +73,7 @@ interface DropdownMenuProps {
 const DropdownMenu: React.FC<DropdownMenuProps> = ({
   isOpen,
   onClose,
-  triggerRef,
+  triggerRect,
   project,
   onRestore,
   onPermanentDelete,
@@ -80,74 +86,91 @@ const DropdownMenu: React.FC<DropdownMenuProps> = ({
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
     };
-    const handleClickOutside = (e: MouseEvent) => {
+    const handlePointerDown = (e: PointerEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        if (triggerRef.current && !triggerRef.current.contains(e.target as Node)) {
-          onClose();
-        }
+        onClose();
       }
     };
+    const handleScrollOrResize = () => onClose();
 
     document.addEventListener('keydown', handleKeyDown);
-    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('pointerdown', handlePointerDown, true);
+    window.addEventListener('scroll', handleScrollOrResize, true);
+    window.addEventListener('resize', handleScrollOrResize);
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
-      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('pointerdown', handlePointerDown, true);
+      window.removeEventListener('scroll', handleScrollOrResize, true);
+      window.removeEventListener('resize', handleScrollOrResize);
     };
-  }, [isOpen, onClose, triggerRef]);
+  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 
-  // Get trigger position
-  const getPosition = () => {
-    const trigger = triggerRef.current;
-    if (!trigger) return { top: 0, left: 0 };
-    const rect = trigger.getBoundingClientRect();
-    return {
-      top: rect.bottom + 4,
-      left: rect.left - 156, // align right edge to trigger right edge
-    };
-  };
+  // Hitung posisi dari rect trigger yang sudah disimpan saat klik.
+  let top = 0;
+  let left = 0;
+  if (triggerRect) {
+    const viewportW = window.innerWidth;
+    const viewportH = window.innerHeight;
+    const spaceBelow = viewportH - triggerRect.bottom;
 
-  const pos = getPosition();
+    left = Math.min(
+      Math.max(VIEWPORT_MARGIN, triggerRect.right - MENU_WIDTH),
+      viewportW - MENU_WIDTH - VIEWPORT_MARGIN
+    );
 
-  return (
+    const openUp = spaceBelow < MENU_HEIGHT + MENU_GAP && triggerRect.top > MENU_HEIGHT + MENU_GAP;
+    top = openUp
+      ? triggerRect.top - MENU_HEIGHT - MENU_GAP
+      : triggerRect.bottom + MENU_GAP;
+    top = Math.min(Math.max(VIEWPORT_MARGIN, top), viewportH - MENU_HEIGHT - VIEWPORT_MARGIN);
+  }
+
+  return createPortal(
     <div
       ref={menuRef}
-      className="fixed z-[100] animate-in fade-in-20 zoom-in-95 duration-150"
+      className="fixed"
       style={{
-        top: `${pos.top}px`,
-        left: `${pos.left}px`,
+        top: `${top}px`,
+        left: `${left}px`,
+        width: `${MENU_WIDTH}px`,
+        zIndex: 2147483000,
       }}
       role="menu"
       aria-label={`Menu aksi untuk ${project.name}`}
     >
       <div
-        className="w-40 rounded-xl bg-[#18181c] border border-white/5 shadow-2xl overflow-hidden"
-        style={{ boxShadow: '0 20px 40px -12px rgba(0,0,0,0.7)' }}
+        className="rounded-xl overflow-hidden"
+        style={{
+          background: '#18181c',
+          boxShadow: '0 16px 40px -8px rgba(0,0,0,0.85), 0 0 0 1px rgba(255,255,255,0.06)',
+        }}
       >
         <button
           type="button"
           onClick={() => { onRestore(); onClose(); }}
-          className="w-full px-4 py-3 flex items-center gap-3 text-left text-white text-[15px] font-medium transition-colors hover:bg-white/5"
+          className="w-full px-4 py-3 flex items-center gap-3 text-left text-[14px] font-medium transition-colors hover:bg-white/5"
+          style={{ color: '#ffffff' }}
           role="menuitem"
         >
-          <RotateCcw className="w-5 h-5 text-[#3fbf7f] flex-shrink-0" />
+          <RotateCcw className="w-4.5 h-4.5 flex-shrink-0" style={{ width: 18, height: 18, color: '#3fbf7f' }} />
           <span>Pulihkan</span>
         </button>
-        <div className="h-px bg-white/5 mx-3" />
+        <div className="h-px mx-3" style={{ backgroundColor: 'rgba(255,255,255,0.07)' }} />
         <button
           type="button"
           onClick={() => { onPermanentDelete(); onClose(); }}
-          className="w-full px-4 py-3 flex items-center gap-3 text-left text-[15px] font-medium transition-colors hover:bg-white/5"
+          className="w-full px-4 py-3 flex items-center gap-3 text-left text-[14px] font-medium transition-colors hover:bg-white/5"
           style={{ color: '#e5173f' }}
           role="menuitem"
         >
-          <Trash2 className="w-5 h-5 flex-shrink-0" style={{ color: '#e5173f' }} />
-          <span style={{ color: '#e5173f' }}>Hapus permanen</span>
+          <Trash2 className="flex-shrink-0" style={{ width: 18, height: 18, color: '#e5173f' }} />
+          <span>Hapus permanen</span>
         </button>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };
 
@@ -160,7 +183,12 @@ const TrashPage: React.FC<TrashPageProps> = ({
   const [isLoading, setIsLoading] = useState(true);
   const [toast, setToast] = useState<{ message: string; action?: { label: string; onClick: () => void } } | null>(null);
   const [dropdownProject, setDropdownProject] = useState<Project | null>(null);
-  const dropdownTriggerRef = useRef<HTMLButtonElement>(null);
+  const [dropdownTriggerRect, setDropdownTriggerRect] = useState<DOMRect | null>(null);
+
+  const closeDropdown = useCallback(() => {
+    setDropdownProject(null);
+    setDropdownTriggerRect(null);
+  }, []);
 
   const loadProjects = useCallback(async () => {
     setIsLoading(true);
@@ -242,7 +270,7 @@ const TrashPage: React.FC<TrashPageProps> = ({
         <header className="flex items-center justify-between mb-6">
           <button
             onClick={onBack}
-            className="tap p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-white/5 transition-colors"
+            className="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-white/5 transition-colors"
             aria-label="Kembali"
           >
             <ChevronLeft className="w-5 h-5" />
@@ -256,15 +284,17 @@ const TrashPage: React.FC<TrashPageProps> = ({
               </span>
             )}
           </div>
-          {projects.length > 0 && (
+          {projects.length > 0 ? (
             <button
               type="button"
               onClick={handleEmptyTrash}
-              className="tap p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-white/5 transition-colors"
+              className="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-white/5 transition-colors"
               aria-label="Kosongkan tong sampah"
             >
               <Trash2 className="w-5 h-5" />
             </button>
+          ) : (
+            <div className="w-9 h-9" />
           )}
         </header>
 
@@ -278,70 +308,82 @@ const TrashPage: React.FC<TrashPageProps> = ({
           </div>
         ) : (
           <div className="space-y-3">
-            {projects.map((project) => (
-              <div
-                key={project.id}
-                className="flex items-center gap-3 tap"
-                style={{ backgroundColor: 'rgba(255,255,255,0.04)', borderRadius: '12px', padding: '12px' }}
-              >
-                {/* Thumbnail */}
-                <div className="relative flex-shrink-0 overflow-hidden rounded-xl" style={{ width: '64px', height: '64px' }}>
-                  {project.thumbnail ? (
-                    <img
-                      src={project.thumbnail}
-                      alt={project.name}
-                      className="w-full h-full object-cover"
-                    />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center" style={{ backgroundColor: generateThumbnailColor(project.id) }}>
-                      <Loader2 className="w-8 h-8 text-white/80" fill="currentColor" strokeWidth={0} />
-                    </div>
-                  )}
-                  {/* Aspect Ratio Badge */}
-                  <div className="absolute bottom-1 left-1 px-1.5 py-0.5 rounded text-[9px] font-medium text-white"
-                    style={{ backgroundColor: 'rgba(11,11,13,0.8)' }}>
-                    {project.aspectRatio}
-                  </div>
-                </div>
-
-                {/* Info */}
-                <div className="flex-1 min-w-0">
-                  <div className="font-medium text-white text-[15px] truncate">{project.name}</div>
-                  <div className="text-[12px] text-zinc-500 mt-0.5 whitespace-nowrap truncate">
-                    Dihapus {formatRelativeTime(project.deletedAt || 0)} · sisa {getDaysUntilPermanentDelete(project.deletedAt)} hari
-                  </div>
-                </div>
-
-                {/* Action button - 3 dot dropdown */}
-                <button
-                  ref={dropdownTriggerRef}
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setDropdownProject(project);
-                  }}
-                  className="tap p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-white/5 transition-colors flex-shrink-0"
-                  aria-label={`Menu aksi untuk ${project.name}`}
-                  aria-expanded={dropdownProject?.id === project.id}
-                  aria-haspopup="menu"
-                  style={{ minWidth: '44px', minHeight: '44px' }}
+            {projects.map((project) => {
+              const isMenuOpen = dropdownProject?.id === project.id;
+              return (
+                <div
+                  key={project.id}
+                  className="flex items-center gap-3"
+                  style={{ backgroundColor: 'rgba(255,255,255,0.04)', borderRadius: '12px', padding: '12px' }}
                 >
-                  <MoreVertical className="w-5 h-5" />
-                </button>
+                  {/* Thumbnail */}
+                  <div className="relative flex-shrink-0 overflow-hidden rounded-xl" style={{ width: '64px', height: '64px' }}>
+                    {project.thumbnail ? (
+                      <img
+                        src={project.thumbnail}
+                        alt={project.name}
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center" style={{ backgroundColor: generateThumbnailColor(project.id) }}>
+                        <Loader2 className="w-8 h-8 text-white/80" fill="currentColor" strokeWidth={0} />
+                      </div>
+                    )}
+                    {/* Aspect Ratio Badge */}
+                    <div className="absolute bottom-1 left-1 px-1.5 py-0.5 rounded text-[9px] font-medium text-white"
+                      style={{ backgroundColor: 'rgba(11,11,13,0.8)' }}>
+                      {project.aspectRatio}
+                    </div>
+                  </div>
 
-                {/* Dropdown Menu */}
-                {dropdownProject?.id === project.id && (
-                  <DropdownMenu
-                    isOpen={true}
-                    onClose={() => setDropdownProject(null)}
-                    triggerRef={dropdownTriggerRef}
-                    project={project}
-                    onRestore={() => handleRestoreProject(project)}
-                    onPermanentDelete={() => handlePermanentDeleteProject(project)}
-                  />
-                )}
-              </div>
-            ))}
+                  {/* Info */}
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium text-white text-[15px] truncate">{project.name}</div>
+                    <div className="text-[12px] mt-0.5 whitespace-nowrap truncate" style={{ color: '#71717a' }}>
+                      Dihapus {formatRelativeTime(project.deletedAt || 0)} · sisa {getDaysUntilPermanentDelete(project.deletedAt)} hari
+                    </div>
+                  </div>
+
+                  {/* Action button - 3 dot dropdown */}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (isMenuOpen) {
+                        closeDropdown();
+                        return;
+                      }
+                      setDropdownTriggerRect(e.currentTarget.getBoundingClientRect());
+                      setDropdownProject(project);
+                    }}
+                    className="rounded-xl transition-colors flex-shrink-0 flex items-center justify-center"
+                    style={{
+                      minWidth: '40px',
+                      minHeight: '40px',
+                      color: isMenuOpen ? '#ffffff' : '#a1a1aa',
+                      backgroundColor: isMenuOpen ? 'rgba(255,255,255,0.08)' : 'transparent',
+                    }}
+                    aria-label={`Menu aksi untuk ${project.name}`}
+                    aria-expanded={isMenuOpen}
+                    aria-haspopup="menu"
+                  >
+                    <MoreVertical className="w-5 h-5" />
+                  </button>
+
+                  {/* Dropdown Menu */}
+                  {isMenuOpen && (
+                    <DropdownMenu
+                      isOpen
+                      onClose={closeDropdown}
+                      triggerRect={dropdownTriggerRect}
+                      project={project}
+                      onRestore={() => handleRestoreProject(project)}
+                      onPermanentDelete={() => handlePermanentDeleteProject(project)}
+                    />
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </div>

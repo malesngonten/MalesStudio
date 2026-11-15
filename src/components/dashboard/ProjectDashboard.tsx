@@ -700,7 +700,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
         </header>
 
         {/* Greeting */}
-        <h1 className="text-[32px] font-bold text-white leading-[1.2] tracking-[-0.02em] mb-8">
+        <h1 className="text-[32px] text-white leading-[1.2] tracking-[-0.02em] mb-8">
           Mau bikin video apa hari ini?
         </h1>
 
