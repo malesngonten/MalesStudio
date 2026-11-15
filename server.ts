@@ -2452,11 +2452,12 @@ TOOL USAGE EXAMPLES:
 
 MODE SELECTION:
 - If user says hello/greeting/pure chat → plain text response in Indonesian, NO tools, NO JSON
-- If user asks to search the internet, find information online, or look up something → respond with JSON toolCalls using runBashCommand (curl/wget)
+- If user asks to search the internet, find information online, or look up something → respond with JSON toolCalls using runBashCommand (curl/wget), THEN give a DIRECT final answer in Indonesian answering the user's question
 - If user asks to create/modify/render video files → respond with ONLY valid JSON matching schema above
 - When modifying: prefer modifyTimeline for targeted clip changes; use writeFile timeline.json only when you need to rewrite the whole timeline; for component code changes prefer editFile (surgical) and use writeFile only for full rewrites.
 - Jangan pernah membalas dengan JSON satu tool saja di luar schema (mis. {"tool":"readFile"} tanpa summary/toolCalls). Selalu bungkus dalam {"summary": "...", "toolCalls": [...]}.
 - ATURAN WAJIB: Setiap balasan HARUS berisi toolCalls ATAU jawaban final. Jangan menulis 'saya akan melakukan X' tanpa toolCalls untuk X di balasan yang sama.
+- SAAT MENGJAWAB PENCAIRAN INTERNET: Setelah selesai menjalankan runBashCommand untuk mencari, berikan JAWABAN LANGSUNG ke konteks pertanyaan user. JANGAN menampilkan detail teknis seperti "ronde 1", "ronde 2", "tool calls", "stdout", "stderr", "exitCode", atau struktur HTML mentah di jawaban akhir. Jawablah pertanyaan secara natural dan informatif dalam bahasa Indonesia, seperti AI assistant biasa.
 
 Current timeline:
 ${JSON.stringify(currentTimelineData, null, 2)}
