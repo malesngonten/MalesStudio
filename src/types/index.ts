@@ -287,7 +287,7 @@ export interface WebSearchHit {
   content: string;
   score?: number;
   publishedDate?: string;
-  source: 'tavily' | 'searxng';
+  source: 'tavily' | 'duckduckgo' | 'bing' | 'searxng';
 }
 
 export interface WebSearchOptions {
@@ -299,7 +299,7 @@ export interface WebPageContent {
   url: string;
   title: string;
   content: string;
-  source: 'tavily' | 'fetch' | 'searxng';
+  source: 'tavily' | 'duckduckgo' | 'bing' | 'fetch' | 'jina-reader' | 'searxng';
 }
 
 export interface WebResearchResult {

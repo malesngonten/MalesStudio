@@ -1916,6 +1916,8 @@ app.get('/api/agent/web-research/status', (_req, res) => {
   res.json({
     tavilyConfigured: Boolean(process.env.TAVILY_API_KEY),
     searxngConfigured: Boolean(process.env.SEARXNG_URL),
+    freeSearchAvailable: true, // DuckDuckGo + Bing selalu dicoba tanpa API key
+    freeProviders: ['duckduckgo', 'bing'],
   });
 });
 
