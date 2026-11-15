@@ -2997,9 +2997,18 @@ User request:
               if (!normalized?.toolCalls?.length) {
                 // JSON but no toolCalls - use summary or friendly text
                 console.log(`[MULTI-TURN] Round ${currentRound} - JSON without toolCalls`);
-                const summaryText =
+                let summaryText =
                   normalized.summary ||
                   'Respons AI tidak dikenali. Coba kirim ulang prompt.';
+                // Di ronde terakhir (forceTextOnly), jika summary terlalu teknis,
+                // berikan pesan fallback yang lebih ramah pengguna
+                if (forceTextOnly && summaryText) {
+                  const technicalKeywords = ['ronde', 'akumulasi', 'stdout', 'stderr', 'exitCode', 'tool call', 'window.WIZ', '301/redirect', 'javascript', 'parse'];
+                  const isTooTechnical = technicalKeywords.some(k => summaryText.toLowerCase().includes(k.toLowerCase()));
+                  if (isTooTechnical) {
+                    summaryText = 'Maaf, saya mencari informasi di internet tetapi hasil pencarian tidak dapat diekstrak dengan jelas (search engine memblokir atau konten terlalu banyak JavaScript). Coba cari langsung di situs berita lokal seperti Detik, Kompas, atau Tirto.id, atau ketik topik spesifik yang ingin Anda ketahui.';
+                  }
+                }
                 aiMessage.content = summaryText;
                 aiMessage.text = summaryText;
                 aiMessage.status = 'completed';
@@ -3109,11 +3118,17 @@ User request:
               // If this was the last round and AI still wants tools, force text response
               if (currentRound === MAX_ROUNDS) {
                 console.log(`[MULTI-TURN] Round ${currentRound} (MAX) - forcing text response`);
-                const summaryText =
+                let summaryText =
                   normalized.summary ||
                   (normalized.toolCalls.length > 0
                     ? friendlyToolSummary(normalized.toolCalls)
                     : 'Analisis selesai (batas ronde tercapai).');
+                // Jika terlalu teknis, berikan fallback ramah pengguna
+                const technicalKeywords = ['ronde', 'akumulasi', 'stdout', 'stderr', 'exitCode', 'tool call', 'window.WIZ', '301/redirect', 'javascript', 'parse', 'Membaca', 'Menulis', 'Mengedit'];
+                const isTooTechnical = technicalKeywords.some(k => summaryText.toLowerCase().includes(k.toLowerCase()));
+                if (isTooTechnical) {
+                  summaryText = 'Maaf, saya mencari informasi di internet tetapi hasil pencarian tidak dapat diekstrak dengan jelas (search engine memblokir atau konten terlalu banyak JavaScript). Coba cari langsung di situs berita lokal seperti Detik, Kompas, atau Tirto.id, atau ketik topik spesifik yang ingin Anda ketahui.';
+                }
                 aiMessage.content = summaryText;
                 aiMessage.text = summaryText;
                 aiMessage.status = 'completed';
@@ -3146,11 +3161,16 @@ User request:
                 aiMessage.status = 'completed';
                 multiTurnHandled = true;
               } else if (lastNormalized) {
-                const summaryText =
+                let summaryText =
                   lastNormalized.summary ||
                   ((lastNormalized.toolCalls?.length ?? 0) > 0
                     ? friendlyToolSummary(lastNormalized.toolCalls)
                     : 'Analisis selesai.');
+                const technicalKeywords = ['ronde', 'akumulasi', 'stdout', 'stderr', 'exitCode', 'tool call', 'window.WIZ', '301/redirect', 'javascript', 'parse', 'Membaca', 'Menulis', 'Mengedit'];
+                const isTooTechnical = technicalKeywords.some(k => summaryText.toLowerCase().includes(k.toLowerCase()));
+                if (isTooTechnical) {
+                  summaryText = 'Maaf, saya mencari informasi di internet tetapi hasil pencarian tidak dapat diekstrak dengan jelas (search engine memblokir atau konten terlalu banyak JavaScript). Coba cari langsung di situs berita lokal seperti Detik, Kompas, atau Tirto.id, atau ketik topik spesifik yang ingin Anda ketahui.';
+                }
                 aiMessage.content = summaryText;
                 aiMessage.text = summaryText;
                 aiMessage.status = 'completed';
