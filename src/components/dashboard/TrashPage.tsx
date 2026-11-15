@@ -1,17 +1,14 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { createPortal } from 'react-dom';
 import {
   ChevronLeft,
   Trash2,
   RotateCcw,
   Loader2,
   AlertTriangle,
-  Clock,
+  MoreVertical,
 } from 'lucide-react';
 import { projectService, Project } from '../../services/ProjectService';
-import { BottomSheet } from '../ui/BottomSheet';
 import { Toast } from '../ui/Toast';
-import { IconButton } from '../ui/IconButton';
 
 const ASPECT_RATIO_CONFIG: Record<string, { width: number; height: number }> = {
   '9:16': { width: 1080, height: 1920 },
@@ -54,6 +51,106 @@ function getDaysUntilPermanentDelete(deletedAt: number | null): number {
   return Math.max(0, 30 - daysInTrash);
 }
 
+/**
+ * Dropdown menu floating di dekat tombol 3-titik.
+ * Menutup otomatis saat klik di luar atau ESC.
+ */
+interface DropdownMenuProps {
+  isOpen: boolean;
+  onClose: () => void;
+  triggerRef: React.RefObject<HTMLButtonElement | null>;
+  project: Project;
+  onRestore: () => void;
+  onPermanentDelete: () => void;
+}
+
+const DropdownMenu: React.FC<DropdownMenuProps> = ({
+  isOpen,
+  onClose,
+  triggerRef,
+  project,
+  onRestore,
+  onPermanentDelete,
+}) => {
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    const handleClickOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        if (triggerRef.current && !triggerRef.current.contains(e.target as Node)) {
+          onClose();
+        }
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isOpen, onClose, triggerRef]);
+
+  if (!isOpen) return null;
+
+  // Get trigger position
+  const getPosition = () => {
+    const trigger = triggerRef.current;
+    if (!trigger) return { top: 0, left: 0 };
+    const rect = trigger.getBoundingClientRect();
+    return {
+      top: rect.bottom + 4,
+      left: rect.left - 156, // align right edge to trigger right edge
+    };
+  };
+
+  const pos = getPosition();
+
+  return (
+    <div
+      ref={menuRef}
+      className="fixed z-[100] animate-in fade-in-20 zoom-in-95 duration-150"
+      style={{
+        top: `${pos.top}px`,
+        left: `${pos.left}px`,
+      }}
+      role="menu"
+      aria-label={`Menu aksi untuk ${project.name}`}
+    >
+      <div
+        className="w-40 rounded-xl bg-[#18181c] border border-white/5 shadow-2xl overflow-hidden"
+        style={{ boxShadow: '0 20px 40px -12px rgba(0,0,0,0.7)' }}
+      >
+        <button
+          type="button"
+          onClick={() => { onRestore(); onClose(); }}
+          className="w-full px-4 py-3 flex items-center gap-3 text-left text-white text-[15px] font-medium transition-colors hover:bg-white/5"
+          role="menuitem"
+        >
+          <RotateCcw className="w-5 h-5 text-[#3fbf7f] flex-shrink-0" />
+          <span>Pulihkan</span>
+        </button>
+        <div className="h-px bg-white/5 mx-3" />
+        <button
+          type="button"
+          onClick={() => { onPermanentDelete(); onClose(); }}
+          className="w-full px-4 py-3 flex items-center gap-3 text-left text-[15px] font-medium transition-colors hover:bg-white/5"
+          style={{ color: '#e5173f' }}
+          role="menuitem"
+        >
+          <Trash2 className="w-5 h-5 flex-shrink-0" style={{ color: '#e5173f' }} />
+          <span style={{ color: '#e5173f' }}>Hapus permanen</span>
+        </button>
+      </div>
+    </div>
+  );
+};
+
 const TrashPage: React.FC<TrashPageProps> = ({
   onBack,
   onProjectSelect,
@@ -62,30 +159,8 @@ const TrashPage: React.FC<TrashPageProps> = ({
   const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [toast, setToast] = useState<{ message: string; action?: { label: string; onClick: () => void } } | null>(null);
-  const [showActionSheet, setShowActionSheet] = useState<Project | null>(null);
-  const [showConfirmSheet, setShowConfirmSheet] = useState<{ project: Project; action: 'restore' | 'permanentDelete' } | null>(null);
-
-  // Long press handling
-  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const isLongPressRef = useRef(false);
-
-  const handleLongPress = (project: Project, e: React.TouchEvent | React.MouseEvent) => {
-    if ('touches' in e) {
-      longPressTimerRef.current = setTimeout(() => {
-        isLongPressRef.current = true;
-        e.preventDefault();
-        setShowActionSheet(project);
-      }, 450);
-    }
-  };
-
-  const handleLongPressEnd = () => {
-    if (longPressTimerRef.current) {
-      clearTimeout(longPressTimerRef.current);
-      longPressTimerRef.current = null;
-    }
-    isLongPressRef.current = false;
-  };
+  const [dropdownProject, setDropdownProject] = useState<Project | null>(null);
+  const dropdownTriggerRef = useRef<HTMLButtonElement>(null);
 
   const loadProjects = useCallback(async () => {
     setIsLoading(true);
@@ -115,23 +190,7 @@ const TrashPage: React.FC<TrashPageProps> = ({
     setTimeout(() => setToast(null), action ? 6000 : 3000);
   };
 
-  const handleOpenActionSheet = (project: Project, e: React.MouseEvent) => {
-    e.stopPropagation();
-    e.preventDefault();
-    setShowActionSheet(project);
-  };
-
-  const handleRestoreProject = (project: Project) => {
-    setShowActionSheet(null);
-    setShowConfirmSheet({ project, action: 'restore' });
-  };
-
-  const handlePermanentDeleteProject = (project: Project) => {
-    setShowActionSheet(null);
-    setShowConfirmSheet({ project, action: 'permanentDelete' });
-  };
-
-  const handleConfirmRestore = async (project: Project) => {
+  const handleRestoreProject = async (project: Project) => {
     try {
       await projectService.restoreProject(project.id);
       showToastMessage('Project dipulihkan');
@@ -142,7 +201,7 @@ const TrashPage: React.FC<TrashPageProps> = ({
     }
   };
 
-  const handleConfirmPermanentDelete = async (project: Project) => {
+  const handlePermanentDeleteProject = async (project: Project) => {
     try {
       await projectService.permanentlyDeleteProject(project.id);
       showToastMessage('Project dihapus permanen');
@@ -165,99 +224,6 @@ const TrashPage: React.FC<TrashPageProps> = ({
       console.error('Failed to empty trash:', e);
       showToastMessage('Gagal mengosongkan tong sampah');
     }
-  };
-
-  // Sheets
-  const renderActionSheet = () => {
-    if (!showActionSheet) return null;
-    const project = showActionSheet;
-    return (
-      <BottomSheet
-        isOpen={true}
-        onClose={() => setShowActionSheet(null)}
-        title="Aksi Project"
-      >
-        <div className="px-5 py-4 flex items-center justify-between border-b border-white/5">
-          <h3 className="text-[15px] font-semibold text-white truncate max-w-[200px]">{project.name}</h3>
-          <button type="button" onClick={() => setShowActionSheet(null)} className="tap p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-white/5 transition-colors" aria-label="Tutup">
-            <RotateCcw className="w-5 h-5" />
-          </button>
-        </div>
-        <div className="px-3 pb-5">
-          <button
-            type="button"
-            onClick={() => { handleRestoreProject(project); }}
-            className="w-full px-4 py-3.5 rounded-xl flex items-center gap-3 text-left transition-colors hover:bg-white/5 active:bg-white/6"
-          >
-            <RotateCcw className="w-5 h-5 text-white flex-shrink-0" />
-            <span className="text-[16px] font-medium text-white">Pulihkan</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => { handlePermanentDeleteProject(project); }}
-            className="w-full px-4 py-3.5 rounded-xl flex items-center gap-3 text-left transition-colors hover:bg-white/5 active:bg-white/6 mt-1"
-            style={{ color: '#e5173f' }}
-          >
-            <Trash2 className="w-5 h-5 flex-shrink-0" style={{ color: '#e5173f' }} />
-            <span className="text-[16px] font-medium" style={{ color: '#e5173f' }}>Hapus permanen</span>
-          </button>
-        </div>
-      </BottomSheet>
-    );
-  };
-
-  const renderConfirmSheet = () => {
-    if (!showConfirmSheet) return null;
-    const { project, action } = showConfirmSheet;
-    const isRestore = action === 'restore';
-    return (
-      <BottomSheet
-        isOpen={true}
-        onClose={() => setShowConfirmSheet(null)}
-        title={action === 'restore' ? 'Pulihkan project' : 'Hapus permanen'}
-      >
-        <div className="px-5 py-4 flex items-center justify-between border-b border-white/5">
-          <h3 className="text-[15px] font-semibold text-white">{isRestore ? 'Pulihkan project' : 'Hapus permanen'}</h3>
-          <button type="button" onClick={() => setShowConfirmSheet(null)} className="tap p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-white/5 transition-colors" aria-label="Tutup">
-            <RotateCcw className="w-5 h-5" />
-          </button>
-        </div>
-        <div className="px-5 py-5">
-          <p className="text-white text-[15px] leading-relaxed mb-6">
-            {isRestore
-              ? `Project "${project.name}" akan dipulihkan dan muncul kembali di daftar project.`
-              : `Project "${project.name}" akan dihapus permanen beserta semua aset, thumbnail, dan hasil render. Tindakan ini <strong>tidak bisa dibatalkan</strong>.`
-            }
-          </p>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => setShowConfirmSheet(null)}
-              className="flex-1 py-2.5 px-4 rounded-xl text-zinc-300 font-medium hover:bg-white/5 hover:text-white transition-colors"
-              style={{ backgroundColor: 'rgba(255,255,255,0.06)' }}
-            >
-              Batal
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                if (isRestore) handleConfirmRestore(project);
-                else handleConfirmPermanentDelete(project);
-                setShowConfirmSheet(null);
-              }}
-              className="flex-1 py-2.5 px-4 rounded-xl font-medium text-white transition-colors"
-              style={{
-                background: isRestore
-                  ? 'linear-gradient(135deg, #3fbf7f 0%, #2ec971 100%)'
-                  : 'linear-gradient(135deg, #e5173f 0%, #c91434 100%)',
-              }}
-            >
-              {isRestore ? 'Pulihkan' : 'Hapus permanen'}
-            </button>
-          </div>
-        </div>
-      </BottomSheet>
-    );
   };
 
   function generateThumbnailColor(projectId: string): string {
@@ -317,12 +283,6 @@ const TrashPage: React.FC<TrashPageProps> = ({
                 key={project.id}
                 className="flex items-center gap-3 tap"
                 style={{ backgroundColor: 'rgba(255,255,255,0.04)', borderRadius: '12px', padding: '12px' }}
-                onTouchStart={(e) => handleLongPress(project, e)}
-                onTouchEnd={handleLongPressEnd}
-                onTouchMove={handleLongPressEnd}
-                onMouseDown={(e) => handleLongPress(project, e)}
-                onMouseUp={handleLongPressEnd}
-                onMouseLeave={handleLongPressEnd}
               >
                 {/* Thumbnail */}
                 <div className="relative flex-shrink-0 overflow-hidden rounded-xl" style={{ width: '64px', height: '64px' }}>
@@ -346,35 +306,45 @@ const TrashPage: React.FC<TrashPageProps> = ({
 
                 {/* Info */}
                 <div className="flex-1 min-w-0">
-                  <div className="font-medium text-white text-[14px] truncate">{project.name}</div>
-                  <div className="text-[12px] text-zinc-400 mt-0.5 flex items-center gap-1.5">
-                    <Clock className="w-3 h-3 flex-shrink-0" />
-                    <span>Dihapus {formatRelativeTime(project.deletedAt || 0)}</span>
-                    <span>·</span>
-                    <span className={getDaysUntilPermanentDelete(project.deletedAt) <= 3 ? 'text-red-400' : ''}>
-                      Akan hilang dalam {getDaysUntilPermanentDelete(project.deletedAt)} hari
-                    </span>
+                  <div className="font-medium text-white text-[15px] truncate">{project.name}</div>
+                  <div className="text-[12px] text-zinc-500 mt-0.5 whitespace-nowrap truncate">
+                    Dihapus {formatRelativeTime(project.deletedAt || 0)} · sisa {getDaysUntilPermanentDelete(project.deletedAt)} hari
                   </div>
                 </div>
 
-                {/* Action button */}
+                {/* Action button - 3 dot dropdown */}
                 <button
+                  ref={dropdownTriggerRef}
                   type="button"
-                  onClick={(e) => handleOpenActionSheet(project, e)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setDropdownProject(project);
+                  }}
                   className="tap p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-white/5 transition-colors flex-shrink-0"
-                  aria-label="Menu aksi"
+                  aria-label={`Menu aksi untuk ${project.name}`}
+                  aria-expanded={dropdownProject?.id === project.id}
+                  aria-haspopup="menu"
                   style={{ minWidth: '44px', minHeight: '44px' }}
                 >
-                  <Trash2 className="w-5 h-5" />
+                  <MoreVertical className="w-5 h-5" />
                 </button>
+
+                {/* Dropdown Menu */}
+                {dropdownProject?.id === project.id && (
+                  <DropdownMenu
+                    isOpen={true}
+                    onClose={() => setDropdownProject(null)}
+                    triggerRef={dropdownTriggerRef}
+                    project={project}
+                    onRestore={() => handleRestoreProject(project)}
+                    onPermanentDelete={() => handlePermanentDeleteProject(project)}
+                  />
+                )}
               </div>
             ))}
           </div>
         )}
       </div>
-
-      {renderActionSheet()}
-      {renderConfirmSheet()}
 
       {toast && (
         <Toast
