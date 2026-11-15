@@ -2457,7 +2457,7 @@ MODE SELECTION:
 - When modifying: prefer modifyTimeline for targeted clip changes; use writeFile timeline.json only when you need to rewrite the whole timeline; for component code changes prefer editFile (surgical) and use writeFile only for full rewrites.
 - Jangan pernah membalas dengan JSON satu tool saja di luar schema (mis. {"tool":"readFile"} tanpa summary/toolCalls). Selalu bungkus dalam {"summary": "...", "toolCalls": [...]}.
 - ATURAN WAJIB: Setiap balasan HARUS berisi toolCalls ATAU jawaban final. Jangan menulis 'saya akan melakukan X' tanpa toolCalls untuk X di balasan yang sama.
-- SAAT MENGJAWAB PENCAIRAN INTERNET: Setelah selesai menjalankan runBashCommand untuk mencari, berikan JAWABAN LANGSUNG ke konteks pertanyaan user dalam bentuk teks biasa (plain text). JANGAN menampilkan detail teknis seperti "ronde", "tool calls", "stdout", "stderr", "exitCode", "akumulasi tools", atau struktur HTML mentah di jawaban akhir. JANGAN sertakan toolCalls atau JSON di jawaban akhir. Jika mengembalikan JSON dengan toolCalls kosong, isi summary dengan JAWABAN LANGSUNG ke pertanyaan user dalam bahasa Indonesia, JANGAN laporan proses teknis. Jawablah pertanyaan secara natural dan informatif, seperti AI assistant biasa.
+- SAAT MENGJAWAB PENCAIRAN INTERNET: Setelah selesai menjalankan runBashCommand untuk mencari, berikan JAWABAN LANGSUNG ke konteks pertanyaan user dalam bentuk teks biasa (plain text). JANGAN menampilkan detail teknis seperti "ronde", "tool calls", "stdout", "stderr", "exitCode", "akumulasi tools", atau struktur HTML mentah di jawaban akhir. JANGAN sertakan toolCalls atau JSON di jawaban akhir. Jika mengembalikan JSON dengan toolCalls kosong, isi summary dengan JAWABAN LANGSUNG ke pertanyaan user dalam bahasa Indonesia (contoh: "Berita viral terbaru di Indonesia saat ini adalah..."), JANGAN laporan proses teknis (contoh: "Berdasarkan 5 ronde pencarian..."). Jawablah pertanyaan secara natural dan informatif, seperti AI assistant biasa. Jika hasil pencarian tidak cukup, katakan langsung bahwa tidak dapat menemukan informasi, bukan menjelaskan proses pencarian.
 
 Current timeline:
 ${JSON.stringify(currentTimelineData, null, 2)}
@@ -3000,12 +3000,25 @@ User request:
                 let summaryText =
                   normalized.summary ||
                   'Respons AI tidak dikenali. Coba kirim ulang prompt.';
-                // Di ronde terakhir (forceTextOnly), jika summary terlalu teknis,
-                // berikan pesan fallback yang lebih ramah pengguna
-                if (forceTextOnly && summaryText) {
-                  const technicalKeywords = ['ronde', 'akumulasi', 'stdout', 'stderr', 'exitCode', 'tool call', 'window.WIZ', '301/redirect', 'javascript', 'parse'];
-                  const isTooTechnical = technicalKeywords.some(k => summaryText.toLowerCase().includes(k.toLowerCase()));
-                  if (isTooTechnical) {
+                // Safety net: jika summary mengandung detail teknis proses pencarian,
+                // ganti dengan pesan fallback ramah pengguna (di SEMUA ronde, bukan cuma terakhir)
+                if (summaryText) {
+                  const technicalKeywords = [
+                    'ronde', 'akumulasi', 'stdout', 'stderr', 'exitCode', 'tool call',
+                    'window.WIZ', '301/redirect', 'javascript', 'parse',
+                    'Membaca', 'Menulis', 'Mengedit', 'hasil pencarian',
+                    'percobaan search', 'Analisis Hasil', 'Google Search',
+                    'DuckDuckGo', 'Bing Search', 'Kompas', 'anti-scraping',
+                    'struktur HTML', 'kosong', 'redirect error', '404',
+                    'total ', 'total ', 'total ', 'Berdasarkan',
+                    'Meskipun', 'Kesimpulan', 'Saran untuk',
+                    'platform sosial', 'news aggregator', 'konten evergreen',
+                  ];
+                  const isTooLong = summaryText.length > 300;
+                  const isTooTechnical = technicalKeywords.some(k =>
+                    summaryText.toLowerCase().includes(k.toLowerCase())
+                  );
+                  if (isTooLong || isTooTechnical) {
                     summaryText = 'Maaf, saya mencari informasi di internet tetapi hasil pencarian tidak dapat diekstrak dengan jelas (search engine memblokir atau konten terlalu banyak JavaScript). Coba cari langsung di situs berita lokal seperti Detik, Kompas, atau Tirto.id, atau ketik topik spesifik yang ingin Anda ketahui.';
                   }
                 }
@@ -3124,9 +3137,22 @@ User request:
                     ? friendlyToolSummary(normalized.toolCalls)
                     : 'Analisis selesai (batas ronde tercapai).');
                 // Jika terlalu teknis, berikan fallback ramah pengguna
-                const technicalKeywords = ['ronde', 'akumulasi', 'stdout', 'stderr', 'exitCode', 'tool call', 'window.WIZ', '301/redirect', 'javascript', 'parse', 'Membaca', 'Menulis', 'Mengedit'];
-                const isTooTechnical = technicalKeywords.some(k => summaryText.toLowerCase().includes(k.toLowerCase()));
-                if (isTooTechnical) {
+                const technicalKeywords = [
+                  'ronde', 'akumulasi', 'stdout', 'stderr', 'exitCode', 'tool call',
+                  'window.WIZ', '301/redirect', 'javascript', 'parse',
+                  'Membaca', 'Menulis', 'Mengedit', 'hasil pencarian',
+                  'percobaan search', 'Analisis Hasil', 'Google Search',
+                  'DuckDuckGo', 'Bing Search', 'Kompas', 'anti-scraping',
+                  'struktur HTML', 'kosong', 'redirect error', '404',
+                  'total ', 'Berdasarkan', 'Meskipun', 'Kesimpulan',
+                  'Saran untuk', 'platform sosial', 'news aggregator',
+                  'konten evergreen',
+                ];
+                const isTooLong = summaryText.length > 300;
+                const isTooTechnical = technicalKeywords.some(k =>
+                  summaryText.toLowerCase().includes(k.toLowerCase())
+                );
+                if (isTooLong || isTooTechnical) {
                   summaryText = 'Maaf, saya mencari informasi di internet tetapi hasil pencarian tidak dapat diekstrak dengan jelas (search engine memblokir atau konten terlalu banyak JavaScript). Coba cari langsung di situs berita lokal seperti Detik, Kompas, atau Tirto.id, atau ketik topik spesifik yang ingin Anda ketahui.';
                 }
                 aiMessage.content = summaryText;
@@ -3156,8 +3182,28 @@ User request:
               let isJson = false;
               try { JSON.parse(cleaned); isJson = true; } catch {}
               if (!isJson) {
-                aiMessage.content = cleaned;
-                aiMessage.text = cleaned;
+                // Plain text response - check if too technical
+                let cleanedText = cleaned;
+                const technicalKeywords = [
+                  'ronde', 'akumulasi', 'stdout', 'stderr', 'exitCode', 'tool call',
+                  'window.WIZ', '301/redirect', 'javascript', 'parse',
+                  'Membaca', 'Menulis', 'Mengedit', 'hasil pencarian',
+                  'percobaan search', 'Analisis Hasil', 'Google Search',
+                  'DuckDuckGo', 'Bing Search', 'Kompas', 'anti-scraping',
+                  'struktur HTML', 'kosong', 'redirect error', '404',
+                  'total ', 'Berdasarkan', 'Meskipun', 'Kesimpulan',
+                  'Saran untuk', 'platform sosial', 'news aggregator',
+                  'konten evergreen',
+                ];
+                const isTooLong = cleanedText.length > 300;
+                const isTooTechnical = technicalKeywords.some(k =>
+                  cleanedText.toLowerCase().includes(k.toLowerCase())
+                );
+                if (isTooLong || isTooTechnical) {
+                  cleanedText = 'Maaf, saya mencari informasi di internet tetapi hasil pencarian tidak dapat diekstrak dengan jelas (search engine memblokir atau konten terlalu banyak JavaScript). Coba cari langsung di situs berita lokal seperti Detik, Kompas, atau Tirto.id, atau ketik topik spesifik yang ingin Anda ketahui.';
+                }
+                aiMessage.content = cleanedText;
+                aiMessage.text = cleanedText;
                 aiMessage.status = 'completed';
                 multiTurnHandled = true;
               } else if (lastNormalized) {
@@ -3166,9 +3212,22 @@ User request:
                   ((lastNormalized.toolCalls?.length ?? 0) > 0
                     ? friendlyToolSummary(lastNormalized.toolCalls)
                     : 'Analisis selesai.');
-                const technicalKeywords = ['ronde', 'akumulasi', 'stdout', 'stderr', 'exitCode', 'tool call', 'window.WIZ', '301/redirect', 'javascript', 'parse', 'Membaca', 'Menulis', 'Mengedit'];
-                const isTooTechnical = technicalKeywords.some(k => summaryText.toLowerCase().includes(k.toLowerCase()));
-                if (isTooTechnical) {
+                const technicalKeywords = [
+                  'ronde', 'akumulasi', 'stdout', 'stderr', 'exitCode', 'tool call',
+                  'window.WIZ', '301/redirect', 'javascript', 'parse',
+                  'Membaca', 'Menulis', 'Mengedit', 'hasil pencarian',
+                  'percobaan search', 'Analisis Hasil', 'Google Search',
+                  'DuckDuckGo', 'Bing Search', 'Kompas', 'anti-scraping',
+                  'struktur HTML', 'kosong', 'redirect error', '404',
+                  'total ', 'Berdasarkan', 'Meskipun', 'Kesimpulan',
+                  'Saran untuk', 'platform sosial', 'news aggregator',
+                  'konten evergreen',
+                ];
+                const isTooLong = summaryText.length > 300;
+                const isTooTechnical = technicalKeywords.some(k =>
+                  summaryText.toLowerCase().includes(k.toLowerCase())
+                );
+                if (isTooLong || isTooTechnical) {
                   summaryText = 'Maaf, saya mencari informasi di internet tetapi hasil pencarian tidak dapat diekstrak dengan jelas (search engine memblokir atau konten terlalu banyak JavaScript). Coba cari langsung di situs berita lokal seperti Detik, Kompas, atau Tirto.id, atau ketik topik spesifik yang ingin Anda ketahui.';
                 }
                 aiMessage.content = summaryText;
