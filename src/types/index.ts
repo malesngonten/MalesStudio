@@ -274,3 +274,38 @@ export interface Project {
   fps: number;
   status: ProjectStatus;
 }
+
+/* ========================================================
+ * WEB RESEARCH TYPES
+ * Digunakan AI agent untuk mencari, membaca, dan menganalisis
+ * informasi dari internet selama proses pembuatan video.
+ * ======================================================== */
+
+export interface WebSearchHit {
+  url: string;
+  title: string;
+  content: string;
+  score?: number;
+  publishedDate?: string;
+  source: 'tavily' | 'searxng';
+}
+
+export interface WebSearchOptions {
+  maxResults?: number;
+  searchDepth?: 'basic' | 'advanced';
+}
+
+export interface WebPageContent {
+  url: string;
+  title: string;
+  content: string;
+  source: 'tavily' | 'fetch' | 'searxng';
+}
+
+export interface WebResearchResult {
+  query: string;
+  results: WebSearchHit[];
+  pages: WebPageContent[];
+  error?: string;
+}
+

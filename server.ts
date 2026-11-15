@@ -13,6 +13,7 @@ import {
   AIUsageStats,
   AIUsageQuery,
 } from './src/types';
+import { webSearch as wsSearch, webRead as wsRead } from './src/services/WebResearchService';
 
 dotenv.config();
 
@@ -1121,7 +1122,7 @@ function discoverLocalAgents() {
       version: '1.0.0-core',
       status: 'ready',
       description: 'Engine otonom lokal terintegrasi dengan akses terminal penuh (runBashCommand). Bisa install dependency, menjalankan perintah shell, dan mengakses internet seperti AI agent code (OpenCode/Codex). Tanpa ketergantungan binary eksternal.',
-      supportedTools: ['readFile', 'writeFile', 'listDirectory', 'modifyTimeline', 'gitCheckpoint', 'runBashCommand'],
+      supportedTools: ['readFile', 'writeFile', 'listDirectory', 'modifyTimeline', 'gitCheckpoint', 'runBashCommand', 'webSearch', 'webRead'],
       latencyMs: 12,
       isSelected: selectedAgentId === 'agent-builtin',
     },
@@ -1587,6 +1588,17 @@ async function executeTool(toolCall: any): Promise<any> {
       });
     }
 
+    case 'webSearch': {
+      return wsSearch(toolCall.query || '', {
+        maxResults: toolCall.maxResults ?? 5,
+        searchDepth: toolCall.searchDepth ?? 'basic',
+      });
+    }
+
+    case 'webRead': {
+      return wsRead(toolCall.url || '');
+    }
+
     default:
       return { error: `Unknown tool: ${tool}` };
   }
@@ -1662,7 +1674,8 @@ interface NormalizedAIResponse {
 }
 
 function toolSig(tc: any): string {
-  return `${tc.tool}:${tc.path || tc.layerId || tc.command || tc.tool}`;
+  const key = tc.path || tc.layerId || tc.command || tc.query || tc.url || tc.tool;
+  return `${tc.tool}:${key}`;
 }
 
 function normalizeAIResponse(parsed: any): NormalizedAIResponse | null {
@@ -1876,6 +1889,36 @@ app.get('/api/agent/status', (req, res) => {
     selectedAgentId,
   });
 });
+
+// 4b. Web Research API — AI agent mencari informasi dari internet
+app.post('/api/agent/web-search', (req, res) => {
+  const { query, maxResults, searchDepth } = req.body || {};
+  if (!query || typeof query !== 'string') {
+    return res.status(400).json({ error: 'query is required' });
+  }
+  wsSearch(query, { maxResults, searchDepth })
+    .then((result) => res.json(result))
+    .catch((err) => res.status(500).json({ error: err?.message || 'Web search failed' }));
+});
+
+app.post('/api/agent/web-read', (req, res) => {
+  const { url } = req.body || {};
+  if (!url || typeof url !== 'string') {
+    return res.status(400).json({ error: 'url is required' });
+  }
+  wsRead(url)
+    .then((result) => res.json(result))
+    .catch((err) => res.status(500).json({ error: err?.message || 'Web read failed' }));
+});
+
+// 4c. Web research provider status
+app.get('/api/agent/web-research/status', (_req, res) => {
+  res.json({
+    tavilyConfigured: Boolean(process.env.TAVILY_API_KEY),
+    searxngConfigured: Boolean(process.env.SEARXNG_URL),
+  });
+});
+
 
 // 5. POST /api/agent/cancel
 app.post('/api/agent/cancel', (req, res) => {
@@ -2365,7 +2408,7 @@ app.post('/api/agent/prompt', async (req, res) => {
       // - CHAT mode: greetings/general questions → plain text response, no tools
       // - EDIT/ACT mode: video production requests → JSON with tool calls (file ops, terminal, render)
       const systemPrompt = `You are the AI video production agent for Males Ngonten Studio, a short video editor for TikTok/Reels/Shorts.
-You operate on a local file system and have FULL terminal access. You can read, write, delete files, run shell commands, install npm packages, access the internet via curl/wget, and render videos.
+You operate on a local file system and have FULL terminal access. You can read, write, delete files, run shell commands, install npm packages, access the internet via web research tools, and render videos.
 
 FREEDOM:
 - You have FULL freedom to READ and EDIT every file in the project, including:
@@ -2377,9 +2420,20 @@ FREEDOM:
   - npm install any package
   - curl/wget to access the internet and search information
   - git, node, npx, ffmpeg, and any shell command
-- If the user asks to search the internet, find information, or look up something online → use runBashCommand with curl/wget. Do NOT say you cannot access the internet.
+- You have WEB RESEARCH access via webSearch and webRead. You can:
+  - webSearch: cari informasi di internet berdasarkan topik (Tavily primary, SearXNG fallback)
+  - webRead: buka dan baca konten halaman web berdasarkan URL
+  - Gunakan web research untuk topik faktual, berita, sejarah, edukasi, sains, dan topik yang membutuhkan akurasi
+- If the user asks to search the internet, find information, or look up something online → use webSearch/webRead tools. Do NOT say you cannot access the internet.
 - If the user request is a clear modification (change color, text, duration, animation, position, speed, etc.) → respond with JSON toolCalls that DIRECTLY modify files. Do NOT stop at just readFile.
 - You may combine readFile + writeFile/modifyTimeline in the same response if needed, but the END RESULT must be a file change.
+
+WHEN TO USE WEB RESEARCH (WAJIB):
+- Gunakan web research SEBELUM menyusun naskah jika topik membutuhkan fakta yang akurat (sejarah, berita, sains, edukasi, produk, dll.)
+- Jangan mengarang fakta, nama tokoh, tanggal, atau sumber. Gunakan web research untuk verifikasi.
+- Setelah mencari, bandingkan informasi dari beberapa sumber jika memungkinkan.
+- Selalu sertakan URL dan referensi sumber yang relevan dalam jawaban akhir.
+- Jika informasi tidak ditemukan atau tidak cukup, katakan langsung kepada user, jangan mengarang.
 
 COMPONENT EDITING MODEL (instance vs blueprint) — WAJIB DIPATUHI:
 Setiap clip elemen punya tiga field penting di timeline.json:
@@ -2419,7 +2473,7 @@ AVAILABLE TOOLS (respond with JSON matching this schema):
   "summary": "Short explanation in Indonesian (1-2 sentences)",
   "toolCalls": [
     {
-      "tool": "readFile | writeFile | editFile | deleteFile | listDirectory | runBashCommand | renderVideo | modifyTimeline | forkElementComponent",
+      "tool": "readFile | writeFile | editFile | deleteFile | listDirectory | runBashCommand | renderVideo | modifyTimeline | forkElementComponent | webSearch | webRead",
       "path": "file path relative to project root (for file tools / forkElementComponent)",
       "content": "file content string (for writeFile)",
       "oldString": "potongan kode lama yang dicari (untuk editFile)",
@@ -2432,7 +2486,11 @@ AVAILABLE TOOLS (respond with JSON matching this schema):
       "layerId": "layer id in timeline.json (for modifyTimeline / forkElementComponent)",
       "clipId": "clip id in timeline.json (for modifyTimeline / forkElementComponent)",
       "slug": "element slug from library (for forkElementComponent)",
-      "updates": "object with props/elementProps to merge into the clip (for modifyTimeline)"
+      "updates": "object with props/elementProps to merge into the clip (for modifyTimeline)",
+      "query": "kata kunci pencarian (for webSearch)",
+      "maxResults": "jumlah maksimal hasil pencarian, default 5 (for webSearch)",
+      "searchDepth": "'basic' atau 'advanced' (for webSearch)",
+      "url": "URL halaman web yang ingin dibaca (for webRead)"
     }
   ]
 }
@@ -2447,17 +2505,20 @@ TOOL USAGE EXAMPLES:
 - Delete file: {"tool": "deleteFile", "path": "src/OldComp.tsx"}
 - List directory: {"tool": "listDirectory", "path": "src"}
 - Run terminal: {"tool": "runBashCommand", "command": "npm install @remotion/media"}
+- Search internet: {"tool": "webSearch", "query": "sejarah Kekaisaran Romawi", "maxResults": 5, "searchDepth": "basic"}
+- Read web page: {"tool": "webRead", "url": "https://id.wikipedia.org/wiki/Kekaisaran_Romawi"}
 - Search internet: {"tool": "runBashCommand", "command": "curl -s \"https://www.google.com/search?q=kenapa+gibran+mundur\" | head -c 2000"}
 - Render video: {"tool": "renderVideo", "resolution": "720p", "fps": 30, "out": "out/video.mp4"}
 
 MODE SELECTION:
 - If user says hello/greeting/pure chat → plain text response in Indonesian, NO tools, NO JSON
-- If user asks to search the internet, find information online, or look up something → respond with JSON toolCalls using runBashCommand (curl/wget) in the FIRST turn, THEN give a DIRECT plain text final answer in Indonesian answering the user's question. Do NOT include toolCalls in the final answer.
+- If user asks to search the internet, find information online, or look up something → respond with JSON toolCalls using webSearch/webRead in the FIRST turn, THEN give a DIRECT plain text final answer in Indonesian answering the user's question. Do NOT include toolCalls in the final answer.
 - If user asks to create/modify/render video files → respond with ONLY valid JSON matching schema above
+- For factual content (history, news, education, science, products): use webSearch/webRead FIRST to gather accurate info, THEN compose script/video. Do not fabricate facts.
 - When modifying: prefer modifyTimeline for targeted clip changes; use writeFile timeline.json only when you need to rewrite the whole timeline; for component code changes prefer editFile (surgical) and use writeFile only for full rewrites.
 - Jangan pernah membalas dengan JSON satu tool saja di luar schema (mis. {"tool":"readFile"} tanpa summary/toolCalls). Selalu bungkus dalam {"summary": "...", "toolCalls": [...]}.
 - ATURAN WAJIB: Setiap balasan HARUS berisi toolCalls ATAU jawaban final. Jangan menulis 'saya akan melakukan X' tanpa toolCalls untuk X di balasan yang sama.
-- SAAT MENGJAWAB PENCAIRAN INTERNET: Setelah selesai menjalankan runBashCommand untuk mencari, berikan JAWABAN LANGSUNG ke konteks pertanyaan user dalam bentuk teks biasa (plain text). JANGAN menampilkan detail teknis seperti "ronde", "tool calls", "stdout", "stderr", "exitCode", "akumulasi tools", atau struktur HTML mentah di jawaban akhir. JANGAN sertakan toolCalls atau JSON di jawaban akhir. Jika mengembalikan JSON dengan toolCalls kosong, isi summary dengan JAWABAN LANGSUNG ke pertanyaan user dalam bahasa Indonesia (contoh: "Berita viral terbaru di Indonesia saat ini adalah..."), JANGAN laporan proses teknis (contoh: "Berdasarkan 5 ronde pencarian..."). Jawablah pertanyaan secara natural dan informatif, seperti AI assistant biasa. Jika hasil pencarian tidak cukup, katakan langsung bahwa tidak dapat menemukan informasi, bukan menjelaskan proses pencarian.
+- SAAT MENGJAWAB PENCAIRAN INTERNET: Setelah selesai menjalankan webSearch/webRead untuk mencari, berikan JAWABAN LANGSUNG ke konteks pertanyaan user dalam bentuk teks biasa (plain text). JANGAN menampilkan detail teknis seperti "ronde", "tool calls", "stdout", "stderr", "exitCode", "akumulasi tools", atau struktur HTML mentah di jawaban akhir. JANGAN sertakan toolCalls atau JSON di jawaban akhir. Jika mengembalikan JSON dengan toolCalls kosong, isi summary dengan JAWABAN LANGSUNG ke pertanyaan user dalam bahasa Indonesia (contoh: "Berita viral terbaru di Indonesia saat ini adalah..."), JANGAN laporan proses teknis (contoh: "Berdasarkan 5 ronde pencarian..."). Jawablah pertanyaan secara natural dan informatif, seperti AI assistant biasa. Jika hasil pencarian tidak cukup, katakan langsung bahwa tidak dapat menemukan informasi, bukan menjelaskan proses pencarian.
 
 Current timeline:
 ${JSON.stringify(currentTimelineData, null, 2)}
