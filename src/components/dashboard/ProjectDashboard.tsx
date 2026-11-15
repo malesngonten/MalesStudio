@@ -15,12 +15,12 @@ import {
   RotateCcw,
   Copy,
   Edit2,
-  AlertTriangle,
 } from 'lucide-react';
 import { projectService } from '../../services/ProjectService';
 import type { Project } from '../../types';
 import { BottomSheet } from '../ui/BottomSheet';
 import { Toast } from '../ui/Toast';
+import { AINotConfiguredToast } from '../ui/AINotConfiguredToast';
 
 interface ProjectDashboardProps {
   onProjectSelect: (projectId: string) => void;
@@ -493,6 +493,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
   const [prompt, setPrompt] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [actionProject, setActionProject] = useState<Project | null>(null);
+  const [showAiWarning, setShowAiWarning] = useState(false);
   const [toast, setToast] = useState<{
     message: string;
     action?: { label: string; onClick: () => void };
@@ -581,6 +582,11 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
   const handleSubmitPrompt = (e: React.FormEvent) => {
     e.preventDefault();
     if (!prompt.trim() || isSubmitting) return;
+    if (!isAIConfigured) {
+      // Pesan tidak dikirim dan teks tetap dipertahankan di input.
+      setShowAiWarning(true);
+      return;
+    }
     const trimmed = prompt.trim();
     setPrompt('');
     onNewProjectWithPrompt(trimmed, selectedRatio);
@@ -756,16 +762,6 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
               </button>
             </div>
 
-            {!isAIConfigured && (
-              <button
-                type="button"
-                onClick={onOpenSettings}
-                className="flex items-center gap-1.5 text-[12px] text-amber-400/90 hover:text-amber-300 transition-colors text-left"
-              >
-                <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
-                AI belum dikonfigurasi — buka Pengaturan
-              </button>
-            )}
           </form>
         </div>
 
@@ -929,6 +925,12 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
         selectedRatio={selectedRatio}
         onSelectRatio={setSelectedRatio}
         triggerRef={ratioButtonRef}
+      />
+
+      <AINotConfiguredToast
+        open={showAiWarning}
+        onClose={() => setShowAiWarning(false)}
+        onOpenSettings={onOpenSettings}
       />
 
       {toast && (

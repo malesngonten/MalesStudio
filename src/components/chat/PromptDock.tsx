@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { AgentAttachment } from '../../contracts/agentProtocol';
 import { TimelineClip, TimelineLayer } from '../../types';
+import { AINotConfiguredToast } from '../ui/AINotConfiguredToast';
 
 interface PromptDockProps {
   onSendMessage: (text: string, attachments: AgentAttachment[]) => void;
@@ -20,6 +21,7 @@ interface PromptDockProps {
   onStopAgent: () => void;
   prefilledPrompt?: string;
   byokModelId?: string;
+  isByokConfigured?: boolean;
   onOpenSettings: () => void;
   isTimelineOpen: boolean;
   onToggleTimeline: () => void;
@@ -86,6 +88,7 @@ export const PromptDock: React.FC<PromptDockProps> = ({
   onStopAgent,
   prefilledPrompt,
   byokModelId,
+  isByokConfigured,
   onOpenSettings,
   isTimelineOpen,
   onToggleTimeline,
@@ -98,6 +101,7 @@ export const PromptDock: React.FC<PromptDockProps> = ({
   const [inputText, setInputText] = useState('');
   const [attachments, setAttachments] = useState<AgentAttachment[]>([]);
   const [isMultiLine, setIsMultiLine] = useState(false);
+  const [showAiWarning, setShowAiWarning] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -175,6 +179,12 @@ export const PromptDock: React.FC<PromptDockProps> = ({
     }
     if (!inputText.trim() && attachments.length === 0) return;
 
+    if (!isByokConfigured) {
+      // Jangan kirim dan jangan hapus teks/attachment yang sudah diketik.
+      setShowAiWarning(true);
+      return;
+    }
+
     onSendMessage(inputText, attachments);
     setInputText('');
     setAttachments([]);
@@ -250,7 +260,13 @@ export const PromptDock: React.FC<PromptDockProps> = ({
           <button
             key={idx}
             type="button"
-            onClick={() => onSendMessage(prompt, [])}
+            onClick={() => {
+              if (!isByokConfigured) {
+                setShowAiWarning(true);
+                return;
+              }
+              onSendMessage(prompt, []);
+            }}
             disabled={isAgentWorking}
             className="tap whitespace-nowrap text-xs font-medium px-3.5 py-1.5 rounded-full bg-gradient-to-r from-zinc-900/90 via-zinc-850/90 to-zinc-900/90 hover:from-zinc-800 hover:to-zinc-800 text-zinc-300 hover:text-white transition-all shrink-0 shadow-md active:scale-95 disabled:opacity-40"
           >
@@ -398,6 +414,12 @@ export const PromptDock: React.FC<PromptDockProps> = ({
           </div>
         </form>
       </div>
+
+      <AINotConfiguredToast
+        open={showAiWarning}
+        onClose={() => setShowAiWarning(false)}
+        onOpenSettings={onOpenSettings}
+      />
     </div>
   );
 };

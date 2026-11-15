@@ -16,7 +16,6 @@ import {
   Sparkles,
   Bot,
   Sliders,
-  Key,
   Mic,
   Send,
   Type,
@@ -25,6 +24,7 @@ import {
 import { AgentMessage, AgentAttachment, AgentToolCall } from '../../contracts/agentProtocol';
 import { TimelineClip, TimelineLayer, TimelineData } from '../../types';
 import { MessageBubble } from './MessageBubble';
+import { AINotConfiguredToast } from '../ui/AINotConfiguredToast';
 
 interface ChatPanelProps {
   messages: AgentMessage[];
@@ -215,6 +215,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   const [attachments, setAttachments] = useState<AgentAttachment[]>([]);
   const [expandedTools, setExpandedTools] = useState<Record<string, boolean>>({});
   const [isMultiLine, setIsMultiLine] = useState(false);
+  const [showAiWarning, setShowAiWarning] = useState(false);
   const [agentWorkingSeconds, setAgentWorkingSeconds] = useState(0);
 
   // Timer for running seconds while agent is working
@@ -399,6 +400,12 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     }
     if (!inputText.trim() && attachments.length === 0) return;
 
+    if (!isByokConfigured) {
+      // Jangan kirim dan jangan hapus teks/attachment yang sudah diketik.
+      setShowAiWarning(true);
+      return;
+    }
+
     onSendMessage(inputText, attachments);
     setInputText('');
     setAttachments([]);
@@ -451,25 +458,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
   return (
     <div className="w-full h-full flex-1 flex flex-col bg-[#09090c] select-text relative overflow-hidden min-h-0">
-      {/* Helper Banner when AI Provider is not yet configured */}
-      {!isByokConfigured && onOpenSettings && (
-        <div className="px-4 py-2.5 bg-gradient-to-r from-amber-950/70 via-zinc-900 to-zinc-900 flex items-center justify-between gap-3 shrink-0 text-xs sm:text-sm text-amber-200 shadow-sm">
-          <div className="flex items-center gap-2 min-w-0">
-            <Key className="w-4 h-4 text-amber-400 shrink-0" />
-            <span className="truncate">
-              AI Provider belum diatur. Masukkan Base URL & Model ID Anda.
-            </span>
-          </div>
-          <button
-            type="button"
-            onClick={onOpenSettings}
-            className="tap px-3.5 py-1.5 rounded-full bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 font-semibold text-xs shrink-0 transition-colors"
-          >
-            Atur Sekarang
-          </button>
-        </div>
-      )}
-
       {/* Hidden file input */}
       <input
         ref={fileInputRef}
@@ -804,6 +792,12 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         </form>
       </div>
       </div>
+
+      <AINotConfiguredToast
+        open={showAiWarning}
+        onClose={() => setShowAiWarning(false)}
+        onOpenSettings={onOpenSettings ?? (() => {})}
+      />
     </div>
   );
 };
