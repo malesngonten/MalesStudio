@@ -4,7 +4,7 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
-import { spawnSync, spawn, ChildProcess } from 'child_process';
+import { spawnSync, spawn, exec, ChildProcess } from 'child_process';
 import dotenv from 'dotenv';
 import { GoogleGenAI } from '@google/genai';
 import {
@@ -1374,7 +1374,6 @@ async function executeTool(toolCall: any): Promise<any> {
 
     case 'runBashCommand': {
       return new Promise((resolve) => {
-        const { exec } = require('child_process');
         exec(command || '', {
           cwd: ACTIVE_PROJECT_DIR,
           encoding: 'utf-8',
