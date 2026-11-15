@@ -869,10 +869,10 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
         isOpen={actionProject !== null}
         onClose={() => setActionProject(null)}
         title="Aksi Project"
+        subtitle={actionProject?.name}
       >
         {actionProject && (
-          <div className="px-3 pb-5">
-            <div className="px-4 py-2 text-[13px] text-zinc-400 truncate">{actionProject.name}</div>
+          <div className="px-3 pb-5 pt-1">
             <button
               type="button"
               onClick={() => void handleRenameProject(actionProject)}

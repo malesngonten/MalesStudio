@@ -11,6 +11,9 @@ import {
   MoreVertical,
   Play,
   Loader2,
+  Edit2,
+  Copy,
+  Trash2,
 } from 'lucide-react';
 import { projectService, Project } from '../../services/ProjectService';
 import { BottomSheet } from '../ui/BottomSheet';
@@ -538,24 +541,19 @@ const AllProjectsPage: React.FC<AllProjectsPageProps> = ({
         isOpen={true}
         onClose={() => setShowActionSheet(null)}
         title="Aksi Project"
+        subtitle={project.name}
       >
-        <div className="px-5 py-4 flex items-center justify-between border-b border-white/5">
-          <h3 className="text-[15px] font-semibold text-white truncate max-w-[200px]">{project.name}</h3>
-          <button type="button" onClick={() => setShowActionSheet(null)} className="tap p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-white/5 transition-colors" aria-label="Tutup">
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-        <div className="px-3 pb-5">
+        <div className="px-3 pb-5 pt-1">
           <button type="button" onClick={() => { handleRenameProject(project); }} className="w-full px-4 py-3.5 rounded-xl flex items-center gap-3 text-left transition-colors hover:bg-white/5 active:bg-white/6">
-            <ChevronLeft className="w-5 h-5 text-white flex-shrink-0" />
+            <Edit2 className="w-5 h-5 flex-shrink-0" style={{ color: '#d4d4d8' }} />
             <span className="text-[16px] font-medium text-white">Ganti nama</span>
           </button>
           <button type="button" onClick={() => { handleDuplicateProject(project); }} className="w-full px-4 py-3.5 rounded-xl flex items-center gap-3 text-left transition-colors hover:bg-white/5 active:bg-white/6 mt-1">
-            <ChevronLeft className="w-5 h-5 text-white flex-shrink-0" />
+            <Copy className="w-5 h-5 flex-shrink-0" style={{ color: '#d4d4d8' }} />
             <span className="text-[16px] font-medium text-white">Duplikat</span>
           </button>
           <button type="button" onClick={() => { handleDeleteProject(project); }} className="w-full px-4 py-3.5 rounded-xl flex items-center gap-3 text-left transition-colors hover:bg-white/5 active:bg-white/6 mt-1" style={{ color: '#e5173f' }}>
-            <ChevronLeft className="w-5 h-5 flex-shrink-0" style={{ color: '#e5173f' }} />
+            <Trash2 className="w-5 h-5 flex-shrink-0" style={{ color: '#e5173f' }} />
             <span className="text-[16px] font-medium" style={{ color: '#e5173f' }}>Hapus</span>
           </button>
         </div>
