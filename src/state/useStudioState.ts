@@ -785,8 +785,22 @@ export function useStudioState() {
     if (typeof window !== 'undefined') {
       localStorage.removeItem('males_ngonten_last_session');
     }
-    await refreshSessions();
-  }, [refreshSessions]);
+    const list = await refreshSessions();
+
+    // Muat sesi terakhir jika ada, jangan buat sesi baru setiap kali project dibuka.
+    if (list.length > 0) {
+      const latest = [...list].sort((a, b) => {
+        const da = new Date(a.updatedAt || 0).getTime();
+        const db = new Date(b.updatedAt || 0).getTime();
+        return db - da;
+      })[0];
+      setActiveSessionId(latest.id);
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('males_ngonten_last_session', latest.id);
+      }
+      await loadLatestSessionMessages(latest.id);
+    }
+  }, [refreshSessions, loadLatestSessionMessages]);
 
   // Delete chat session — selalu async, memperbarui state frontend langsung tanpa reload.
   // Saat gagal: data tetap utuh di UI dan pengguna diberi tahu via toast.
