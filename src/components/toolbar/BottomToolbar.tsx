@@ -117,7 +117,7 @@ export const BottomToolbar: React.FC<BottomToolbarProps> = ({
   return (
     <>
       {/* Fixed Bottom Navigation Bar — Mobile Dark Mode, always on top of sheets */}
-      <div className="fixed left-0 right-0 bottom-0 z-[60] w-full select-none min-h-[56px] pb-[env(safe-area-inset-bottom)]">
+      <div className="fixed left-0 right-0 bottom-0 z-[80] w-full min-h-[56px] pb-[env(safe-area-inset-bottom)]">
         {/* Background with blur — extends into safe area */}
         <div className="absolute inset-0 bg-gradient-to-t from-[#09090c] via-[#09090c]/95 to-transparent backdrop-blur-xl" />
         {/* Container: icons vertically centered in nav bar height */}
@@ -129,7 +129,7 @@ export const BottomToolbar: React.FC<BottomToolbarProps> = ({
               onClick={tab.onClick}
               aria-label={tab.label}
               aria-pressed={tab.active}
-              className={`shrink-0 min-w-[44px] h-[48px] flex flex-col items-center justify-center gap-1 px-1.5 transition-all duration-300 outline-none relative ${
+              className={`relative z-10 shrink-0 min-w-[44px] h-[48px] flex flex-col items-center justify-center gap-1 px-1.5 transition-colors duration-200 outline-none ${
                 tab.active
                   ? `text-[#E8102D]`
                   : `text-[#8A8A94]`
