@@ -487,12 +487,17 @@ interface ServerProject {
   name: string;
   description?: string;
   thumbnail?: string;
+  thumbnailPath?: string;
   createdAt: number;
   updatedAt: number;
   lastEditedAt: number;
+  deletedAt: number | null;
   aspectRatio: '9:16' | '16:9' | '1:1' | '4:5';
+  width: number;
+  height: number;
   durationInFrames: number;
   fps: number;
+  status: 'draft' | 'rendering' | 'done' | 'failed';
 }
 
 const PROJECT_ASPECTS: Record<string, { width: number; height: number; durationInFrames: number; fps: number }> = {
@@ -522,9 +527,13 @@ function defaultProjectMeta(): ServerProject {
     createdAt: created,
     updatedAt: created,
     lastEditedAt: created,
+    deletedAt: null,
     aspectRatio: '9:16',
+    width: 1080,
+    height: 1920,
     durationInFrames: 150,
     fps: 30,
+    status: 'draft',
   };
 }
 
@@ -571,13 +580,44 @@ function ensureProjectIndex(): void {
         createdAt: stat.birthtimeMs || stat.ctimeMs,
         updatedAt: stat.mtimeMs,
         lastEditedAt: stat.mtimeMs,
+        deletedAt: null,
         aspectRatio: '9:16',
+        width: 1080,
+        height: 1920,
         durationInFrames: 150,
         fps: 30,
+        status: 'draft',
       });
       changed = true;
     }
   } catch {}
+
+  // Migrate existing projects to add missing fields
+  let migrated = false;
+  for (const project of projects) {
+    if (project.deletedAt === undefined) {
+      project.deletedAt = null;
+      migrated = true;
+    }
+    if (project.width === undefined) {
+      const config = PROJECT_ASPECTS[project.aspectRatio] || PROJECT_ASPECTS['9:16'];
+      project.width = config.width;
+      project.height = config.height;
+      migrated = true;
+    }
+    if (project.status === undefined) {
+      project.status = 'draft';
+      migrated = true;
+    }
+    if (project.thumbnailPath === undefined && project.thumbnail) {
+      project.thumbnailPath = project.thumbnail;
+      migrated = true;
+    }
+  }
+  if (migrated) {
+    writeProjectsIndex(projects);
+    changed = true;
+  }
 
   if (changed) writeProjectsIndex(projects);
 }
@@ -602,10 +642,10 @@ function seedProjectFiles(dir: string, project: ServerProject): void {
   if (!fs.existsSync(timelineFile)) {
     const timeline = {
       ...DEFAULT_TIMELINE,
-      width: config.width,
-      height: config.height,
-      fps: config.fps,
-      durationInFrames: config.durationInFrames,
+      width: project.width || config.width,
+      height: project.height || config.height,
+      fps: project.fps || config.fps,
+      durationInFrames: project.durationInFrames || config.durationInFrames,
     };
     fs.writeFileSync(timelineFile, JSON.stringify(timeline, null, 2), 'utf-8');
   }
@@ -706,8 +746,10 @@ function readWorkspaceForProject(id: string) {
   const project = readProjectsIndex().find((p) => p.id === id);
   settings = {
     aspectRatio: project?.aspectRatio || '9:16',
-    fps: timeline?.fps || config.fps,
-    durationInFrames: timeline?.durationInFrames || config.durationInFrames,
+    width: project?.width || config.width,
+    height: project?.height || config.height,
+    fps: timeline?.fps || project?.fps || config.fps,
+    durationInFrames: timeline?.durationInFrames || project?.durationInFrames || config.durationInFrames,
   };
 
   return { timeline, assets, files, settings };
@@ -755,8 +797,11 @@ function writeWorkspaceForProject(id: string, body: any): boolean {
         ...projects[index],
         updatedAt: Date.now(),
         lastEditedAt: Date.now(),
-        fps: body.timeline?.fps ?? projects[index].fps,
-        durationInFrames: body.timeline?.durationInFrames ?? projects[index].durationInFrames,
+        fps: body.timeline?.fps ?? body.settings?.fps ?? projects[index].fps,
+        durationInFrames: body.timeline?.durationInFrames ?? body.settings?.durationInFrames ?? projects[index].durationInFrames,
+        width: body.settings?.width ?? projects[index].width,
+        height: body.settings?.height ?? projects[index].height,
+        status: body.status ?? projects[index].status,
       };
       writeProjectsIndex(projects);
     }
@@ -777,6 +822,34 @@ function copyProjectDir(source: string, destination: string): void {
     else fs.copyFileSync(src, dest);
   }
 }
+
+function cleanupOldDeletedProjects(): void {
+  const projects = readProjectsIndex();
+  const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  let changed = false;
+
+  for (const project of projects) {
+    if (project.deletedAt !== null && project.deletedAt !== undefined && project.deletedAt < thirtyDaysAgo) {
+      // Permanent delete
+      const dir = projectDirFor(project.id);
+      try {
+        if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+      } catch (err) {
+        console.warn(`[Cleanup] Gagal menghapus folder project ${project.id}:`, err);
+      }
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    const filtered = projects.filter(p => !(p.deletedAt !== null && p.deletedAt !== undefined && p.deletedAt < thirtyDaysAgo));
+    writeProjectsIndex(filtered);
+    console.log('[Cleanup] Proyek lama di tong sampah (>30 hari) telah dihapus permanen');
+  }
+}
+
+// Run cleanup on startup
+cleanupOldDeletedProjects();
 
 ensureProjectIndex();
 
@@ -3535,15 +3608,20 @@ app.get('/api/chats/search', (req, res) => {
 });
 
 // 7b. Project management API — real isolated project folders on disk
-app.get('/api/projects', (_req, res) => {
+app.get('/api/projects', (req, res) => {
   ensureProjectIndex();
-  const projects = readProjectsIndex().sort((a, b) => b.lastEditedAt - a.lastEditedAt);
+  const includeDeleted = req.query.deleted === 'true';
+  let projects = readProjectsIndex();
+  if (!includeDeleted) {
+    projects = projects.filter(p => p.deletedAt === null);
+  }
+  projects = projects.sort((a, b) => b.lastEditedAt - a.lastEditedAt);
   res.json({ projects });
 });
 
 app.post('/api/projects', (req, res) => {
   try {
-    const { name, aspectRatio, description, thumbnail } = req.body || {};
+    const { name, aspectRatio, description, thumbnail, width, height, durationInFrames, fps, status } = req.body || {};
     const requestedId = typeof req.body?.id === 'string' ? req.body.id : '';
     const ratio = PROJECT_ASPECTS[aspectRatio] ? aspectRatio : '9:16';
     let id = isValidProjectId(requestedId) ? requestedId : `proj_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
@@ -3558,12 +3636,17 @@ app.post('/api/projects', (req, res) => {
       name: (typeof name === 'string' && name.trim()) || 'Project Baru',
       description: typeof description === 'string' ? description : undefined,
       thumbnail: typeof thumbnail === 'string' ? thumbnail : undefined,
+      thumbnailPath: typeof thumbnail === 'string' ? thumbnail : undefined,
       createdAt: now,
       updatedAt: now,
       lastEditedAt: now,
+      deletedAt: null,
       aspectRatio: ratio,
-      durationInFrames: config.durationInFrames,
-      fps: config.fps,
+      width: width || config.width,
+      height: height || config.height,
+      durationInFrames: durationInFrames || config.durationInFrames,
+      fps: fps || config.fps,
+      status: status || 'draft',
     };
 
     const dir = projectDirFor(id);
@@ -3615,10 +3698,18 @@ app.patch('/api/projects/:id', (req, res) => {
   const index = projects.findIndex((p) => p.id === id);
   if (index === -1) return res.status(404).json({ error: 'Project not found' });
 
-  const allowed = ['name', 'description', 'thumbnail', 'aspectRatio', 'fps', 'durationInFrames'];
+  const allowed = ['name', 'description', 'thumbnail', 'thumbnailPath', 'aspectRatio', 'fps', 'durationInFrames', 'width', 'height', 'status', 'deletedAt'];
   const updates: any = {};
   for (const key of allowed) {
     if (req.body && req.body[key] !== undefined) updates[key] = req.body[key];
+  }
+
+  // Prevent path traversal via name
+  if (updates.name !== undefined) {
+    updates.name = String(updates.name).trim().slice(0, 60);
+    if (!updates.name) {
+      return res.status(400).json({ error: 'Nama project tidak boleh kosong' });
+    }
   }
 
   projects[index] = {
@@ -3633,23 +3724,54 @@ app.patch('/api/projects/:id', (req, res) => {
 
 app.delete('/api/projects/:id', (req, res) => {
   const { id } = req.params;
+  const permanent = req.query.permanent === 'true';
+  
   if (!isValidProjectId(id)) return res.status(400).json({ error: 'Invalid project id' });
 
-  const projects = readProjectsIndex().filter((p) => p.id !== id);
-  writeProjectsIndex(projects);
+  const projects = readProjectsIndex();
+  const projectIndex = projects.findIndex((p) => p.id === id);
+  if (projectIndex === -1) return res.status(404).json({ error: 'Project not found' });
 
-  const dir = projectDirFor(id);
-  try {
-    if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
-  } catch (err: any) {
-    return res.status(500).json({ error: err.message });
+  const project = projects[projectIndex];
+
+  // Check if project is currently rendering
+  if (project.status === 'rendering' && !permanent) {
+    return res.status(409).json({ 
+      error: 'Project sedang dirender', 
+      code: 'RENDERING',
+      message: 'Project ini sedang dalam proses rendering. Batalkan render terlebih dahulu atau gunakan hapus permanen.' 
+    });
   }
 
-  if (ACTIVE_PROJECT_DIR === dir) {
-    if (projects.length > 0) setActiveProjectDir(projects[0].id);
-  }
+  if (permanent) {
+    // Permanent delete - remove from index and delete folder
+    const filtered = projects.filter((p) => p.id !== id);
+    writeProjectsIndex(filtered);
 
-  res.json({ success: true });
+    const dir = projectDirFor(id);
+    try {
+      if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+
+    if (ACTIVE_PROJECT_DIR === dir) {
+      if (filtered.length > 0) setActiveProjectDir(filtered[0].id);
+    }
+
+    res.json({ success: true, permanent: true });
+  } else {
+    // Soft delete - set deletedAt
+    const now = Date.now();
+    projects[projectIndex] = {
+      ...project,
+      deletedAt: now,
+      updatedAt: now,
+      lastEditedAt: now,
+    };
+    writeProjectsIndex(projects);
+    res.json({ success: true, permanent: false, project: projects[projectIndex] });
+  }
 });
 
 app.post('/api/projects/:id/duplicate', (req, res) => {
@@ -3660,10 +3782,26 @@ app.post('/api/projects/:id/duplicate', (req, res) => {
 
     const now = Date.now();
     const newId = `proj_${now}_${Math.random().toString(36).slice(2, 11)}`;
-    const name =
+    let name =
       typeof req.body?.name === 'string' && req.body.name.trim()
         ? req.body.name.trim()
-        : `${source.name} (Copy)`;
+        : `${source.name} (salinan)`;
+
+    // Check for existing copies
+    const projects = readProjectsIndex();
+    const existingCopies = projects.filter(p => 
+      p.name.startsWith(`${source.name} (salinan`) && p.id !== id
+    );
+    if (existingCopies.length > 0) {
+      const numbers = existingCopies
+        .map(p => {
+          const match = p.name.match(/\(salinan (\d+)\)$/);
+          return match ? parseInt(match[1], 10) : 1;
+        })
+        .filter(n => !isNaN(n));
+      const maxNum = numbers.length > 0 ? Math.max(...numbers) : 1;
+      name = `${source.name} (salinan ${maxNum + 1})`;
+    }
 
     copyProjectDir(projectDirFor(id), projectDirFor(newId));
 
@@ -3674,14 +3812,40 @@ app.post('/api/projects/:id/duplicate', (req, res) => {
       createdAt: now,
       updatedAt: now,
       lastEditedAt: now,
+      deletedAt: null,
+      status: 'draft',
     };
-    const projects = readProjectsIndex();
-    projects.unshift(project);
-    writeProjectsIndex(projects);
+    const allProjects = readProjectsIndex();
+    allProjects.unshift(project);
+    writeProjectsIndex(allProjects);
     res.json({ success: true, project });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
+});
+
+app.post('/api/projects/:id/restore', (req, res) => {
+  const { id } = req.params;
+  if (!isValidProjectId(id)) return res.status(400).json({ error: 'Invalid project id' });
+
+  const projects = readProjectsIndex();
+  const index = projects.findIndex((p) => p.id === id);
+  if (index === -1) return res.status(404).json({ error: 'Project not found' });
+
+  const now = Date.now();
+  projects[index] = {
+    ...projects[index],
+    deletedAt: null,
+    updatedAt: now,
+    lastEditedAt: now,
+  };
+  writeProjectsIndex(projects);
+  res.json({ success: true, project: projects[index] });
+});
+
+app.post('/api/projects/cleanup', (_req, res) => {
+  cleanupOldDeletedProjects();
+  res.json({ success: true });
 });
 
 // 8. GET /api/files & PUT /api/files/:filename

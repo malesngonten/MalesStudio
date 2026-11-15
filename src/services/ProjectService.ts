@@ -10,21 +10,12 @@
  *    backend is unreachable.
  */
 
-import { TimelineData, ProjectAsset } from '../types';
+import { TimelineData, ProjectAsset, Project, ProjectStatus } from '../types';
 import { INITIAL_STUDIO_TIMELINE } from '../state/initialTimeline';
 
-export interface Project {
-  id: string;
-  name: string;
-  description?: string;
-  thumbnail?: string;
-  createdAt: number;
-  updatedAt: number;
-  lastEditedAt: number;
-  aspectRatio: '9:16' | '16:9' | '1:1' | '4:5';
-  durationInFrames: number;
-  fps: number;
-}
+// Re-export the shared project type so consumers can keep importing it from
+// this service module.
+export type { Project, ProjectStatus } from '../types';
 
 export interface ProjectWorkspace {
   projectId: string;
@@ -51,6 +42,30 @@ const ASPECT_CONFIG: Record<string, { width: number; height: number; durationInF
 
 function generateId(): string {
   return `proj_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+}
+
+function migrateProject(project: any): Project {
+  const config = ASPECT_CONFIG[project.aspectRatio] || ASPECT_CONFIG['9:16'];
+  const now = Date.now();
+  
+  // Migration defaults for old projects
+  return {
+    id: project.id,
+    name: project.name || 'Project Tanpa Nama',
+    description: project.description,
+    thumbnail: project.thumbnail || project.thumbnailPath,
+    thumbnailPath: project.thumbnailPath || project.thumbnail,
+    createdAt: project.createdAt || now,
+    updatedAt: project.updatedAt || now,
+    lastEditedAt: project.lastEditedAt ?? project.updatedAt ?? now,
+    deletedAt: project.deletedAt ?? null,
+    aspectRatio: project.aspectRatio || '9:16',
+    width: project.width || config.width,
+    height: project.height || config.height,
+    durationInFrames: project.durationInFrames || config.durationInFrames,
+    fps: project.fps || config.fps,
+    status: project.status || 'draft',
+  };
 }
 
 function getAspectConfig(aspectRatio: string) {
@@ -132,7 +147,7 @@ class ProjectService {
       const data = localStorage.getItem(PROJECTS_LIST_KEY);
       if (data) {
         const parsed = JSON.parse(data);
-        if (Array.isArray(parsed)) return parsed;
+        if (Array.isArray(parsed)) return parsed.map(migrateProject);
       }
     } catch {}
     return [];
@@ -164,15 +179,32 @@ class ProjectService {
     const res = await apiRequest<{ projects: Project[] }>('/api/projects');
     if (res && Array.isArray(res.projects)) {
       this.backendAvailable = true;
-      this.mirrorProjects(res.projects);
-      return [...res.projects].sort((a, b) => b.lastEditedAt - a.lastEditedAt);
+      const migrated = res.projects.map(migrateProject);
+      this.mirrorProjects(migrated);
+      return migrated
+        .filter((p) => p.deletedAt === null)
+        .sort((a, b) => (b.lastEditedAt ?? b.updatedAt) - (a.lastEditedAt ?? a.updatedAt));
     }
     this.backendAvailable = false;
-    return this.readLocalProjects().sort((a, b) => b.lastEditedAt - a.lastEditedAt);
+    return this.readLocalProjects()
+      .filter((p) => p.deletedAt === null)
+      .sort((a, b) => (b.lastEditedAt ?? b.updatedAt) - (a.lastEditedAt ?? a.updatedAt));
   }
 
   async getProject(id: string): Promise<Project | null> {
     const projects = await this.getProjects();
+    return projects.find((p) => p.id === id && p.deletedAt === null) || null;
+  }
+
+  async getProjectIncludingDeleted(id: string): Promise<Project | null> {
+    // There is no single-project GET endpoint; fetch the full (incl. deleted)
+    // index and pick the requested project.
+    const res = await apiRequest<{ projects: Project[] }>('/api/projects?deleted=true');
+    if (res && Array.isArray(res.projects)) {
+      const found = res.projects.map(migrateProject).find((p) => p.id === id);
+      if (found) return found;
+    }
+    const projects = this.readLocalProjects();
     return projects.find((p) => p.id === id) || null;
   }
 
@@ -189,14 +221,27 @@ class ProjectService {
     const res = await apiRequest<{ project: Project }>('/api/projects', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, name, aspectRatio, description, thumbnail }),
+      body: JSON.stringify({ 
+        id, 
+        name, 
+        aspectRatio, 
+        description, 
+        thumbnail,
+        width: config.width,
+        height: config.height,
+        durationInFrames: config.durationInFrames,
+        fps: config.fps,
+        status: 'draft' as ProjectStatus,
+        deletedAt: null,
+      }),
     });
 
     if (res?.project) {
       this.backendAvailable = true;
-      const projects = this.readLocalProjects().filter((p) => p.id !== res.project.id);
-      this.writeLocalProjects([res.project, ...projects]);
-      return res.project;
+      const migrated = migrateProject(res.project);
+      const projects = this.readLocalProjects().filter((p) => p.id !== migrated.id);
+      this.writeLocalProjects([migrated, ...projects]);
+      return migrated;
     }
 
     this.backendAvailable = false;
@@ -204,13 +249,16 @@ class ProjectService {
       id,
       name,
       description,
-      thumbnail,
+      thumbnailPath: thumbnail,
       createdAt: now,
       updatedAt: now,
-      lastEditedAt: now,
+      deletedAt: null,
       aspectRatio,
+      width: config.width,
+      height: config.height,
       durationInFrames: config.durationInFrames,
       fps: config.fps,
+      status: 'draft',
     };
 
     const projects = this.readLocalProjects();
@@ -303,41 +351,77 @@ class ProjectService {
   }
 
   async updateProject(projectId: string, updates: Partial<Project>): Promise<Project | null> {
+    const now = Date.now();
+    const allowedUpdates = { ...updates, updatedAt: now, lastEditedAt: now };
+    
     const res = await apiRequest<{ project: Project }>(
       `/api/projects/${encodeURIComponent(projectId)}`,
       {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updates),
+        body: JSON.stringify(allowedUpdates),
       }
     );
 
     const projects = this.readLocalProjects();
     const index = projects.findIndex((p) => p.id === projectId);
     if (res?.project) {
-      if (index !== -1) projects[index] = res.project;
-      else projects.unshift(res.project);
+      const migrated = migrateProject(res.project);
+      if (index !== -1) projects[index] = migrated;
+      else projects.unshift(migrated);
       this.writeLocalProjects(projects);
-      return res.project;
+      return migrated;
     }
 
     if (index === -1) return null;
     projects[index] = {
       ...projects[index],
-      ...updates,
-      updatedAt: Date.now(),
-      lastEditedAt: Date.now(),
+      ...allowedUpdates,
     };
     this.writeLocalProjects(projects);
     return projects[index];
   }
 
   async renameProject(projectId: string, newName: string): Promise<Project | null> {
-    return this.updateProject(projectId, { name: newName });
+    const trimmed = newName.trim();
+    if (!trimmed || trimmed.length > 60) return null;
+    return this.updateProject(projectId, { name: trimmed });
   }
 
   async deleteProject(projectId: string): Promise<boolean> {
-    await apiRequest(`/api/projects/${encodeURIComponent(projectId)}`, { method: 'DELETE' });
+    const now = Date.now();
+    await apiRequest(`/api/projects/${encodeURIComponent(projectId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deletedAt: now, updatedAt: now, lastEditedAt: now }),
+    });
+
+    const projects = this.readLocalProjects();
+    const index = projects.findIndex((p) => p.id === projectId);
+    if (index !== -1) {
+      projects[index] = {
+        ...projects[index],
+        deletedAt: now,
+        updatedAt: now,
+        lastEditedAt: now,
+      };
+      this.writeLocalProjects(projects);
+    }
+    if (localStorage.getItem(ACTIVE_PROJECT_KEY) === projectId) {
+      localStorage.removeItem(ACTIVE_PROJECT_KEY);
+    }
+    return true;
+  }
+
+  async restoreProject(projectId: string): Promise<Project | null> {
+    return this.updateProject(projectId, { deletedAt: null });
+  }
+
+  async permanentlyDeleteProject(projectId: string): Promise<boolean> {
+    // `permanent=true` is required, otherwise the backend performs a soft delete.
+    await apiRequest(`/api/projects/${encodeURIComponent(projectId)}?permanent=true`, {
+      method: 'DELETE',
+    });
 
     const filtered = this.readLocalProjects().filter((p) => p.id !== projectId);
     this.writeLocalProjects(filtered);
@@ -348,6 +432,14 @@ class ProjectService {
       localStorage.removeItem(ACTIVE_PROJECT_KEY);
     }
     return true;
+  }
+
+  async getDeletedProjects(): Promise<Project[]> {
+    const res = await apiRequest<{ projects: Project[] }>('/api/projects?deleted=true');
+    if (res && Array.isArray(res.projects)) {
+      return res.projects.map(migrateProject).filter((p) => p.deletedAt !== null);
+    }
+    return this.readLocalProjects().filter((p) => p.deletedAt !== null);
   }
 
   async setActiveProject(projectId: string): Promise<void> {
@@ -382,29 +474,45 @@ class ProjectService {
     const project = await this.getProject(projectId);
     if (!project) return null;
 
+    const now = Date.now();
+    let baseName = newName || `${project.name} (salinan)`;
+    
+    // Check for existing copies and add number if needed
+    const projects = await this.getProjects();
+    const existingCopies = projects.filter(p => 
+      p.name.startsWith(`${project.name} (salinan`) && p.id !== projectId
+    );
+    if (existingCopies.length > 0) {
+      const numbers = existingCopies
+        .map(p => {
+          const match = p.name.match(/\(salinan (\d+)\)$/);
+          return match ? parseInt(match[1], 10) : 1;
+        })
+        .filter(n => !isNaN(n));
+      const maxNum = numbers.length > 0 ? Math.max(...numbers) : 1;
+      baseName = `${project.name} (salinan ${maxNum + 1})`;
+    }
+
     const res = await apiRequest<{ project: Project }>(
       `/api/projects/${encodeURIComponent(projectId)}/duplicate`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: newName || `${project.name} (Copy)` }),
+        body: JSON.stringify({ name: baseName }),
       }
     );
 
     if (res?.project) {
-      const projects = this.readLocalProjects().filter((p) => p.id !== res.project.id);
-      this.writeLocalProjects([res.project, ...projects]);
-      return res.project;
+      const migrated = migrateProject(res.project);
+      const allProjects = this.readLocalProjects().filter((p) => p.id !== migrated.id);
+      this.writeLocalProjects([migrated, ...allProjects]);
+      return migrated;
     }
 
     // Local fallback
     const workspace = await this.loadProjectWorkspace(projectId);
     if (!workspace) return null;
-    const duplicated = await this.createProject(
-      newName || `${project.name} (Copy)`,
-      project.aspectRatio,
-      project.description
-    );
+    const duplicated = await this.createProject(baseName, project.aspectRatio, project.description);
     await this.saveProjectWorkspace(duplicated.id, workspace);
     return duplicated;
   }

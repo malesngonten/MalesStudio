@@ -130,6 +130,15 @@ export interface GitVersion {
   isActive: boolean;
 }
 
+export type ProjectStatus = 'draft' | 'rendering' | 'done' | 'failed';
+
+export interface ProjectThumbnail {
+  path: string;
+  width: number;
+  height: number;
+  generatedAt: number;
+}
+
 export interface RenderJob {
   id: string;
   status: 'queued' | 'rendering' | 'completed' | 'failed' | 'cancelled';
@@ -240,4 +249,28 @@ export interface AIUsageQuery {
   endDate?: string; // ISO date string
   limit?: number;
   offset?: number;
+}
+
+/* ========================================================
+ * PROJECT TYPES
+ * ======================================================== */
+
+export interface Project {
+  id: string;
+  name: string;
+  description?: string;
+  /** Data URL / path thumbnail (legacy field kept for backend compatibility). */
+  thumbnail?: string;
+  thumbnailPath?: string;
+  createdAt: number;
+  updatedAt: number;
+  /** Legacy backend field; prefer `updatedAt` for sorting. */
+  lastEditedAt?: number;
+  deletedAt: number | null;
+  aspectRatio: '9:16' | '16:9' | '1:1' | '4:5';
+  width: number;
+  height: number;
+  durationInFrames: number;
+  fps: number;
+  status: ProjectStatus;
 }

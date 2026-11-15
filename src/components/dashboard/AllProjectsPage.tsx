@@ -537,6 +537,7 @@ const AllProjectsPage: React.FC<AllProjectsPageProps> = ({
       <BottomSheet
         isOpen={true}
         onClose={() => setShowActionSheet(null)}
+        title="Aksi Project"
       >
         <div className="px-5 py-4 flex items-center justify-between border-b border-white/5">
           <h3 className="text-[15px] font-semibold text-white truncate max-w-[200px]">{project.name}</h3>

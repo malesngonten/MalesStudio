@@ -5,13 +5,14 @@ interface ToastProps {
   open: boolean;
   message: string;
   onClose: () => void;
+  action?: { label: string; onClick: () => void };
 }
 
 /**
  * Toast — Pemberitahuan ringan untuk operasi gagal (mis. hapus aset/sesi).
  * Muncul di bawah tengah, di atas seluruh layar & drawer, tidak mengganggu interaksi.
  */
-export const Toast: React.FC<ToastProps> = ({ open, message, onClose }) => {
+export const Toast: React.FC<ToastProps> = ({ open, message, onClose, action }) => {
   if (!open) return null;
 
   return (
@@ -22,6 +23,16 @@ export const Toast: React.FC<ToastProps> = ({ open, message, onClose }) => {
         <AlertCircle className="w-3 h-3" />
       </div>
       <p className="flex-1 truncate leading-relaxed">{message}</p>
+      {action && (
+        <button
+          type="button"
+          onClick={() => { action.onClick(); onClose(); }}
+          className="shrink-0 px-3 py-1.5 rounded-full text-[13px] font-medium text-white transition-colors"
+          style={{ backgroundColor: 'rgba(229,23,63,0.8)' }}
+        >
+          {action.label}
+        </button>
+      )}
       <button
         type="button"
         onClick={onClose}

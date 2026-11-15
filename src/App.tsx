@@ -2,6 +2,8 @@ import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   useStudioState,
   INITIAL_STUDIO_TIMELINE,
+  ASPECT_RATIOS,
+  AspectRatioType,
 } from './state/useStudioState';
 import { Header, StudioView } from './components/header/Header';
 import { RemotionPreview } from './components/player/RemotionPreview';
@@ -32,8 +34,10 @@ import {
   FILES_STORAGE_KEY,
 } from './hooks/useAutoSaveWorkspace';
 import { ProjectDashboard } from './components/dashboard/ProjectDashboard';
+import AllProjectsPage from './components/dashboard/AllProjectsPage';
+import TrashPage from './components/dashboard/TrashPage';
 import { projectService, Project } from './services/ProjectService';
-import { X, Sparkles, MessageSquare } from 'lucide-react';
+import { X, Sparkles, MessageSquare, Trash2 } from 'lucide-react';
 
 const COMPOSITION_SAMPLE_CODE = `// ShortVideoComposition.tsx
 // Powered by Remotion v4.0 & Males Ngonten Studio AI Agent
@@ -90,6 +94,8 @@ export default function App() {
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [showDashboard, setShowDashboard] = useState(true);
+  const [showAllProjects, setShowAllProjects] = useState(false);
+  const [showTrash, setShowTrash] = useState(false);
   const [isLoadingProject, setIsLoadingProject] = useState(false);
   const [loadedProjectId, setLoadedProjectId] = useState<string | null>(null);
   const [pendingAIPrompt, setPendingAIPrompt] = useState<string | null>(() => {
@@ -152,10 +158,29 @@ export default function App() {
     toast,
     showToast,
     hideToast,
-    handleChangeAspectRatio,
+    handleChangeAspectRatio: studioHandleChangeAspectRatio,
     handleInsertTimelineClip,
     agentStatusDetail,
   } = useStudioState();
+
+  // Wrapper that also persists project metadata (width, height, aspectRatio)
+  // to the project index so dashboard cards reflect the new ratio immediately.
+  const handleChangeAspectRatio = useCallback(
+    (ratio: AspectRatioType) => {
+      const config = ASPECT_RATIOS[ratio];
+      if (!config) return;
+      studioHandleChangeAspectRatio(ratio);
+      if (activeProjectId) {
+        projectService.updateProject(activeProjectId, {
+          width: config.width,
+          height: config.height,
+          aspectRatio: ratio,
+          thumbnailPath: null, // kosongkan agar kartu jatuh ke fallback CSS dengan rasio baru
+        });
+      }
+    },
+    [studioHandleChangeAspectRatio, activeProjectId]
+  );
 
   // Handle client-side render complete (blob URL from browser)
   const handleClientRenderComplete = useCallback((blobUrl: string, fileName: string, size: number) => {
@@ -370,6 +395,8 @@ export default function App() {
       settings: {
         aspectRatio:
           snapshot.activeProject?.aspectRatio || getAspectRatioFromTimeline(snapshot.timeline),
+        width: snapshot.timeline.width,
+        height: snapshot.timeline.height,
         fps: snapshot.timeline.fps,
         durationInFrames: snapshot.timeline.durationInFrames,
       },
@@ -680,7 +707,31 @@ export default function App() {
     setActiveProjectId(null);
     setActiveProject(null);
     setShowDashboard(true);
+    setShowAllProjects(false);
+    setShowTrash(false);
   }, [activeProjectId, saveProjectWorkspace]);
+
+  const handleOpenAllProjects = useCallback(() => {
+    setShowDashboard(false);
+    setShowAllProjects(true);
+    setShowTrash(false);
+  }, []);
+
+  const handleOpenTrash = useCallback(() => {
+    setShowDashboard(false);
+    setShowAllProjects(false);
+    setShowTrash(true);
+  }, []);
+
+  const handleBackFromAllProjects = useCallback(() => {
+    setShowAllProjects(false);
+    setShowDashboard(true);
+  }, []);
+
+  const handleBackFromTrash = useCallback(() => {
+    setShowTrash(false);
+    setShowAllProjects(true);
+  }, []);
 
   const isAIConfigured = Boolean(agentSettings.apiBaseUrl && agentSettings.modelId);
 
@@ -804,13 +855,53 @@ export default function App() {
 
   // Dashboard is the landing page. The studio is only rendered once a project
   // has been opened, which keeps every project workspace isolated.
+  if (showAllProjects) {
+    return (
+      <div className="w-full h-dvh max-h-dvh flex flex-col bg-[#09090b] text-[#f4f4f5] antialiased select-none font-sans">
+        <AllProjectsPage
+          onBack={handleBackFromAllProjects}
+          onProjectSelect={handleOpenProject}
+          isBackendAvailable={isBackendAvailable}
+        />
+        <UnifiedSettingsSheet
+          isOpen={isSettingsOpen}
+          onClose={() => setIsSettingsOpen(false)}
+          settings={agentSettings}
+          onUpdateSettings={handleUpdateSettings}
+        />
+        <Toast open={!!toast} message={toast?.message ?? ''} onClose={hideToast} />
+      </div>
+    );
+  }
+
+  if (showTrash) {
+    return (
+      <div className="w-full h-dvh max-h-dvh flex flex-col bg-[#09090b] text-[#f4f4f5] antialiased select-none font-sans">
+        <TrashPage
+          onBack={handleBackFromTrash}
+          onProjectSelect={handleOpenProject}
+          isBackendAvailable={isBackendAvailable}
+        />
+        <UnifiedSettingsSheet
+          isOpen={isSettingsOpen}
+          onClose={() => setIsSettingsOpen(false)}
+          settings={agentSettings}
+          onUpdateSettings={handleUpdateSettings}
+        />
+        <Toast open={!!toast} message={toast?.message ?? ''} onClose={hideToast} />
+      </div>
+    );
+  }
+
   if (showDashboard || !activeProjectId) {
     return (
       <div className="w-full h-dvh max-h-dvh flex flex-col bg-[#09090b] text-[#f4f4f5] antialiased select-none font-sans">
         <ProjectDashboard
           onProjectSelect={handleOpenProject}
           onNewProjectWithPrompt={handleNewProjectWithPrompt}
-          onOpenSettings={() => setIsSettingsOpen(true)}
+          onOpenSettings={openSettings}
+          onOpenAllProjects={handleOpenAllProjects}
+          onOpenTrash={handleOpenTrash}
           isAIConfigured={isAIConfigured}
           isBackendAvailable={isBackendAvailable}
           isVisible={showDashboard || !activeProjectId}

@@ -36,5 +36,15 @@
     "allowImportingTsExtensions": true,
     "noEmit": true
   },
-  "exclude": ["dist", "projects", "**/__tests__/**", "**/*.test.ts", "**/*.test.tsx"]
+  "exclude": [
+    "dist",
+    "projects",
+    "**/__tests__/**",
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "src/remotion/elements/docs-examples",
+    "src/remotion/elements/remocn",
+    "src/remotion/elements/remocn-lib",
+    "src/remotion/elements/remocn-templates"
+  ]
 }
