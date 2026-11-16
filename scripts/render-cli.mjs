@@ -10,6 +10,7 @@ import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { compileProjectComponent } from './component-compiler.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -67,6 +68,53 @@ if (fs.existsSync(timelinePath)) {
   } catch {}
 }
 
+// Komponen fork/adaptasi diedit setelah aplikasi berjalan, jadi harus
+// dikompilasi dulu. Tanpa ini browser hanya menerima TSX mentah dan render
+// akan jatuh ke fallback FFmpeg yang tidak memuat komponen.
+async function attachCompiledElementCode() {
+  const clips = [];
+  for (const layer of timeline.layers || []) {
+    for (const clip of layer.clips || []) {
+      if (clip?.elementFile) clips.push(clip);
+    }
+  }
+  if (clips.length === 0) return;
+
+  const cache = new Map();
+  for (const clip of clips) {
+    const relativePath = String(clip.elementFile).replace(/^\/+/, '').replace(/\\/g, '/');
+    if (!cache.has(relativePath)) {
+      const compiled = await compileProjectComponent({
+        projectDir,
+        workspaceRoot: ROOT_DIR,
+        relativePath,
+        requireComponentsDir: false,
+      });
+      cache.set(relativePath, compiled.code);
+      console.log(
+        JSON.stringify({
+          type: 'component_compiled',
+          file: relativePath,
+          bytes: compiled.code.length,
+        })
+      );
+    }
+    clip.elementCode = cache.get(relativePath);
+  }
+}
+
+try {
+  await attachCompiledElementCode();
+} catch (err) {
+  console.error(
+    JSON.stringify({
+      type: 'render_error',
+      error: `Gagal mengompilasi komponen project: ${err?.message || String(err)}`,
+    })
+  );
+  process.exit(1);
+}
+
 const inputProps = { timeline };
 
 async function tryRemotionRender() {
@@ -113,6 +161,7 @@ async function tryRemotionRender() {
     outputLocation: outPath,
     inputProps,
     fps: timeline.fps || fps,
+    browserExecutable: '/tmp/opencode/chromium-wrapper.sh',
     onProgress: ({ progress }) => {
       console.log(JSON.stringify({
         type: 'progress',
@@ -131,10 +180,18 @@ async function tryRemotionRender() {
   process.exit(0);
 }
 
+tryRemotionRender().catch((err) => {
+  console.error(JSON.stringify({
+    type: 'render_error',
+    error: err?.message || String(err),
+  }));
+  fallbackFFmpegRender();
+});
+
 function fallbackFFmpegRender() {
   console.log(JSON.stringify({
     type: 'fallback_ffmpeg',
-    reason: 'Remotion renderer unavailable (packages or Chromium missing)',
+    reason: 'Remotion renderer/Chromium unavailable in this environment',
   }));
 
   const totalFrames = timeline.durationInFrames || 150;
@@ -164,7 +221,7 @@ function fallbackFFmpegRender() {
     }
   }
 
-  // Find font
+  // Find font file
   function findFontFile() {
     const candidates = [
       '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
@@ -180,6 +237,24 @@ function fallbackFFmpegRender() {
 
   const fontFile = findFontFile();
   const filterParts = [`format=yuv420p`];
+
+  // Get background color from first video layer
+  let bgColor = '0x181016';
+  if (timeline.layers && Array.isArray(timeline.layers)) {
+    for (const layer of timeline.layers) {
+      if (layer.type === 'video' && Array.isArray(layer.clips)) {
+        const bgClip = layer.clips[0];
+        if (bgClip.props?.backgroundColor) {
+          // Convert CSS color to hex - simple mapping for common values
+          const c = String(bgClip.props.backgroundColor);
+          if (c.includes('#')) {
+            const hexMatch = c.match(/#([0-9a-fA-F]{6})/);
+            if (hexMatch) bgColor = '0x' + hexMatch[1];
+          }
+        }
+      }
+    }
+  }
 
   if (textClips.length > 0) {
     textClips.forEach((tc) => {
@@ -202,7 +277,7 @@ function fallbackFFmpegRender() {
   const ffmpegArgs = [
     '-y',
     '-f', 'lavfi',
-    '-i', `color=c=0x181016:s=${width}x${height}:r=${videoFps}:d=${durationSec}`,
+    '-i', `color=c=${bgColor}:s=${width}x${height}:r=${videoFps}:d=${durationSec}`,
     '-f', 'lavfi',
     '-i', `sine=frequency=432:beep_factor=4:sample_rate=44100:duration=${durationSec}`,
     '-vf', vf,
@@ -271,11 +346,3 @@ function fallbackFFmpegRender() {
     process.exit(1);
   });
 }
-
-tryRemotionRender().catch((err) => {
-  console.error(JSON.stringify({
-    type: 'remotion_error',
-    error: err?.message || String(err),
-  }));
-  fallbackFFmpegRender();
-});

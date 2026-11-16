@@ -161,21 +161,15 @@ export const ShortVideoComposition: React.FC<ShortVideoCompositionProps> = ({ ti
           ...(clip.elementProps || clip.props || {}),
         };
 
-        // Fork komponen (editable React code) → load dari workspace proyek.
-        // Fallback ke komponen registry jika file fork belum ada / gagal compile.
+        // Fork komponen (editable React code) → dieksekusi dari kode hasil
+        // kompilasi server (preview fetch / render inline via elementCode).
         if (clip.elementFile) {
-          const FallbackComponent =
-            def && def.component && typeof def.component === 'function'
-              ? def.component
-              : undefined;
-
           return (
             <AbsoluteFill key={clip.id} className="pointer-events-none select-none">
               <WorkspaceElement
                 elementFile={clip.elementFile}
+                elementCode={clip.elementCode}
                 props={mergedProps}
-                fallback={FallbackComponent}
-                fallbackProps={mergedProps}
               />
             </AbsoluteFill>
           );

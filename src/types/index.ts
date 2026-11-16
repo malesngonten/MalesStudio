@@ -14,6 +14,9 @@ export interface TimelineClip {
   /** Path file komponen fork di workspace proyek (mis. 'achievement-pop.element.tsx').
    *  Jika ada, preview memuat kode dari file ini (bisa diedit AI), fallback ke registry. */
   elementFile?: string;
+  /** Kode CommonJS hasil kompilasi. Hanya diisi saat render (inputProps),
+   *  tidak pernah disimpan ke timeline.json. */
+  elementCode?: string;
   elementProps?: Record<string, any>;
   props?: {
     text?: string;
@@ -323,6 +326,11 @@ export interface RepoFileInfo {
   language?: string;
 }
 
+export interface RepoDoc {
+  path: string;
+  content: string;
+}
+
 export interface RepoResearchResult {
   repoUrl: string;
   repoName: string;
@@ -330,7 +338,24 @@ export interface RepoResearchResult {
   files: RepoFileInfo[];
   readme?: string;
   skillMd?: string;
+  docs?: RepoDoc[];
+  license?: string;
+  packageJson?: string;
   structure: string;
+  error?: string;
+}
+
+export interface RepoSearchMatch {
+  path: string;
+  line: number;
+  text: string;
+}
+
+export interface RepoSearchResult {
+  repoUrl: string;
+  query: string;
+  matches: RepoSearchMatch[];
+  total: number;
   error?: string;
 }
 
