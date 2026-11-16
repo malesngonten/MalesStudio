@@ -21,16 +21,34 @@ import {
   repoSearchFiles as wsRepoSearchFiles,
 } from './src/services/RepositoryResearchService';
 import { compileProjectComponent } from './scripts/component-compiler.mjs';
+import { ErrorLogger } from './src/services/ErrorLogger';
 
 dotenv.config();
+
+let errorLogger: ErrorLogger | null = null;
+function getErrorLogger(): ErrorLogger {
+  if (!errorLogger) {
+    errorLogger = new ErrorLogger(ACTIVE_PROJECT_DIR);
+  }
+  return errorLogger;
+}
+function refreshErrorLogger() {
+  errorLogger = new ErrorLogger(ACTIVE_PROJECT_DIR);
+}
 
 // Process-level error handlers — mencegah server hard-reset/crash saat AI memproses prompt
 process.on('uncaughtException', (err: any) => {
   console.error('[UNCAUGHT EXCEPTION]', err?.message || err);
+  try {
+    if (errorLogger) errorLogger.log('backend', err?.message || String(err), err?.stack, { type: 'uncaughtException' });
+  } catch {}
 });
 
 process.on('unhandledRejection', (reason: any) => {
   console.error('[UNHANDLED REJECTION]', reason?.message || reason);
+  try {
+    if (errorLogger) errorLogger.log('backend', reason?.message || String(reason), reason?.stack, { type: 'unhandledRejection' });
+  } catch {}
 });
 
 const geminiApiKey = process.env.GEMINI_API_KEY;
@@ -50,6 +68,18 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// Error logger middleware — tangkap error otomatis saat testing tanpa perlu user melaporkan
+app.use((err: any, req: any, res: any, next: any) => {
+  try {
+    getErrorLogger().log('backend', err?.message || String(err), err?.stack, {
+      method: req.method,
+      url: req.originalUrl || req.url,
+      body: req.body && typeof req.body === 'object' ? JSON.stringify(req.body).slice(0, 500) : undefined,
+    });
+  } catch {}
+  next(err);
+});
 
 // Directories
 const WORKSPACE_DIR = process.cwd();
@@ -587,6 +617,7 @@ function setActiveProjectDir(id: string): boolean {
   chatSessions = [];
   loadChatSessionsFromDisk();
   activeSessionId = chatSessions[0]?.id || null;
+  refreshErrorLogger();
   return true;
 }
 
@@ -2686,6 +2717,38 @@ app.post('/api/agent/cancel', (req, res) => {
   setAgentStatus('idle');
   broadcastSSE('agent_cancelled', { message: 'Perintah agent dibatalkan oleh pengguna.' });
   res.json({ success: true, message: 'Agent cancelled' });
+});
+
+// Error Log Endpoints — agar user tidak perlu melaporkan error secara manual saat testing
+app.get('/api/agent/error-log', (_req, res) => {
+  try {
+    const entries = getErrorLogger().getEntries();
+    res.json({ success: true, entries, count: entries.length });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
+app.post('/api/agent/error-log', (req, res) => {
+  try {
+    const { source, message, stack, context } = req.body || {};
+    if (!source || !message) {
+      return res.status(400).json({ success: false, error: 'source dan message wajib diisi' });
+    }
+    getErrorLogger().log(source, message, stack, context);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
+app.post('/api/agent/error-log/clear', (_req, res) => {
+  try {
+    getErrorLogger().clear();
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
 });
 
 // 5b. POST /api/agent/test-connection (OpenAI-Compatible BYOK connection test)
