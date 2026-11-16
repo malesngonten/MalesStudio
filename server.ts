@@ -3325,6 +3325,23 @@ REPOSITORY RESEARCH (WAJIB):
 - Semua operasi repository menggunakan workspace terisolasi di .males_ngonten/repo-research/. Tidak ada akses ke direktori luar project aktif.
 - Setelah riset repository, JANGAN berhenti dengan ringkasan/analisis jika user meminta video. Lanjut ke implementasi nyata: tulis komponen/timeline sampai timeline berisi layer dan dapat dipreview.
 
+STANDAR KUALITAS CINEMATIC (WAJIB untuk video promo/premium):
+- Video harus terlihat seperti peluncuran produk teknologi kelas premium (Apple/Google-style launch): dark stage, warm spotlight stage, anamorphic light streaks, kinetic typography, metric reveal.
+- Minimal 5-10 detik (300+ frame @30fps), resolusi 1080x1920 (9:16 vertical) untuk TikTok/Reels/Shorts.
+- Komposisi berlapis: background (video layer) + hero element (adaptasi repo) + headline text + subheadline text + elemen dekoratif/transisi + metric reveal + CTA.
+- Jangan hanya menumpuk komponen katalog generik (light-leak, spotlight, drift) tanpa animasi kamera. Setiap elemen harus ada gerakan: kamera bergerak (crash-zoom, side-push, orbit), cahaya bergerak (spotlight sweep, flare), teks muncul bertahap (kinetic type), angka naik (metric reveal).
+- Gunakan easing yang halus (Easing.bezier, spring) — JANGAN linear. Gerakan harus terasa organik, tidak kaku.
+- Palet warna premium: background gelap (#080706, #0a0908), aksen emas/orangye (#e8b45a, #ffd6b8), krim (#f4ecdf), cahaya hangat.
+- Setiap clip elemen harus punya \`elementSlug\` unik + \`elementFile\` yang menunjuk ke \`src/components/<slug>.element.tsx\` (file yang telah ditulis AI).
+- Komponen hasil adaptasi repo WAJIB self-contained: hanya import \`react\`, \`remotion\`, atau file lokal di \`src/\`. Jangan impor dari \`.males_ngonten/repo-research/\`.
+
+MOTION GRAMMAR DARI video-shotcraft (adaptasi wajib jika repo disebut):
+- Crash-zoom: full panel hold → pre-emptive pull-back → 6-frame strong ease-in crash zoom ke target card → overshoot settel → exposure flash 8-frame decay.
+- Spotlight-hero-card: spotlight scans page → locks onto card → side push-in zoom → card floats up → surrounding area dims to warm black.
+- Kinetic typography: kata muncul satu per satu dari bawah (line-by-line rise), sinkron dengan beat, huruf besar dengan outline stroke.
+- Metric reveal: angka besar (mis. "10x", "48", "3s") naik dari bawah dengan spring, diikuti hairline dan dua baris copy di sebelah kanan.
+- Ukuran teks minimal 32px pada layar agar terbaca di mobile.
+
 COMPONENT EDITING MODEL (instance vs blueprint) — WAJIB DIPATUHI:
 Setiap clip elemen punya tiga field penting di timeline.json:
 - elementSlug  → referensi ke komponen library remocn (blueprint asli, JANGAN diedit)
@@ -3416,10 +3433,11 @@ TIMELINE FORMAT (WAJIB untuk membuat/mengubah video):
 VIDEO IMPLEMENTATION RULES (WAJIB):
 - Timeline kosong (layers: [] atau semua clip kosong) berarti pekerjaan BELUM selesai.
 - Jika user meminta video/konten promosi/animasi, hasil akhir WAJIB berupa timeline.json berisi minimal 1 layer visual dan 1 layer teks (kecuali user secara eksplisit hanya minta komponen/aset).
-- Untuk video promo/premium: gunakan komposisi berlapis (background + headline + subheadline + elemen dekoratif/transisi) dan durasi yang cukup (minimal 5-10 detik, sesuaikan brief).
+- Untuk video promo/premium: gunakan komposisi berlapis (background + headline + subheadline + elemen dekoratif/transisi + metric reveal + CTA) dan durasi yang cukup (minimal 5-10 detik, 300+ frame @30fps).
 - Gunakan searchElements untuk menemukan komponen visual yang relevan (mis. light-leak, spotlight, anamorphic-flare, bento-build, particle-dissolve). Jangan mengarang slug.
 - Komponen katalog otomatis di-fork saat timeline ditulis. Untuk komponen adaptasi repository, tulis dulu file \`src/components/<slug>.element.tsx\`, baru tulis timeline yang mereferensikannya.
 - Setelah menulis timeline, verifikasi dengan readFile timeline.json atau renderVideo jika user meminta render. Jangan mengakhiri dengan analisis/rencana tanpa timeline yang berisi konten.
+- Jika user memberikan repo URL + meminta video → riset repo dulu (repoResearch + repoReadFile terkait motion grammar), lalu LANGSUNG menulis komponen dan timeline dalam respons yang sama. Jangan hanya menjelaskan rencana.
 
 AVAILABLE TOOLS (respond with JSON matching this schema):
 {
