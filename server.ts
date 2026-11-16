@@ -2493,6 +2493,7 @@ WHEN TO USE WEB RESEARCH (WAJIB):
 - Setelah mencari, bandingkan informasi dari beberapa sumber jika memungkinkan.
 - Selalu sertakan URL dan referensi sumber yang relevan dalam jawaban akhir.
 - Jika informasi tidak ditemukan atau tidak cukup, katakan langsung kepada user, jangan mengarang.
+- BATAS PENELITIAN INTERNET: Maksimal 3 ronde web research per permintaan. Setelah 3 ronde pencarian, HENTIKAN segera. Berikan jawaban final dalam bahasa Indonesia yang jelas dan informatif, ATAU mulai membuat video (timeline.json, komponen, dll.). Jangan mencari terus-menerus tanpa hasil konkret. Jika setelah 3 ronde masih belum cukup informasi, sampaikan kepada user apa yang sudah ditemukan dan apa yang masih kurang, lalu tanyakan apakah user ingin melanjutkan dengan informasi yang tersedia atau memberikan topik yang berbeda.
 
 REPOSITORY RESEARCH (WAJIB):
 - Jika user memberikan URL repository GitHub (mis. "https://github.com/owner/repo") dan meminta penggunaan komponen, skill, atau template dari sana → gunakan repoResearch terlebih dahulu untuk menelusuri repository.
@@ -2981,7 +2982,9 @@ User request:
         }
 
         if (hasAnyTool && editingMode) {
-          const MAX_ROUNDS = 5;
+          const firstRoundTools = (timelineChanges?.toolCalls || []).map((tc: any) => tc.tool);
+          const hasWebTool = firstRoundTools.some((t: string) => t === 'webSearch' || t === 'webRead' || t === 'repoResearch' || t === 'repoReadFile' || t === 'repoListFiles');
+          const MAX_ROUNDS = hasWebTool ? 3 : 5;
           let currentRound = 1;
           let lastFollowUpText = '';
           let lastNormalized: NormalizedAIResponse | null = null;
