@@ -28,6 +28,8 @@ function getArg(name, defaultValue) {
 
 const resolution = getArg('resolution', '720p');
 const fps = parseInt(getArg('fps', '30'), 10);
+const compositionId = getArg('composition', 'short-video');
+const totalFrames = parseInt(getArg('frames', '360'), 10);
 const outPath = getArg('out', path.join(ROOT_DIR, 'out', `males_ngonten_${Date.now()}.mp4`));
 const projectDir = getArg('project', path.join(ROOT_DIR, 'projects', 'proyek-remotion-1'));
 
@@ -56,6 +58,7 @@ console.log(JSON.stringify({
   height,
   projectDir,
   targetFile: outPath,
+  frames: totalFrames,
   timestamp: new Date().toISOString()
 }));
 
@@ -119,15 +122,15 @@ const inputProps = { timeline };
 
 async function tryRemotionRender() {
   // Check if Chromium is available - Remotion renderer requires it
-  const chromium = getArg('chromium', '');
-  let chromiumPath = '';
+  const chromiumArg = getArg('chromium', '');
+  const defaultWrapper = path.join(ROOT_DIR, 'scripts', 'chromium-wrapper.sh');
+  let chromiumPath = chromiumArg || defaultWrapper;
   try {
     const { execSync } = await import('child_process');
-    const res = execSync('which chromium-browser || which chromium || true', { encoding: 'utf-8', timeout: 2000 });
-    chromiumPath = res.trim();
-  } catch {}
-  if (!chromiumPath) {
-    throw new Error('Chromium not available - Remotion renderer cannot run');
+    // Validate the chosen executable is launchable
+    execSync(`"${chromiumPath}" --version`, { encoding: 'utf-8', timeout: 3000 });
+  } catch {
+    chromiumPath = defaultWrapper;
   }
 
   // Check if remotion packages are actually installed before attempting import
@@ -149,7 +152,7 @@ async function tryRemotionRender() {
   console.log(JSON.stringify({ type: 'selecting_composition' }));
   const composition = await selectComposition({
     serveUrl: bundleLocation,
-    id: 'short-video',
+    id: compositionId,
     inputProps,
   });
 
@@ -161,7 +164,7 @@ async function tryRemotionRender() {
     outputLocation: outPath,
     inputProps,
     fps: timeline.fps || fps,
-    browserExecutable: '/tmp/opencode/chromium-wrapper.sh',
+    browserExecutable: chromiumPath || '/tmp/opencode/chromium-wrapper.sh',
     onProgress: ({ progress }) => {
       console.log(JSON.stringify({
         type: 'progress',
@@ -188,41 +191,28 @@ tryRemotionRender().catch((err) => {
   fallbackFFmpegRender();
 });
 
+/**
+ * Fallback: render the promo as simple FFmpeg segments (one per shot) and
+ * concatenate them. Chrome/Remotion renderer is unreliable in headless
+ * containers (SIGTRAP on launch), so this guarantees a deterministic MP4.
+ */
 function fallbackFFmpegRender() {
   console.log(JSON.stringify({
     type: 'fallback_ffmpeg',
     reason: 'Remotion renderer/Chromium unavailable in this environment',
   }));
 
-  const totalFrames = timeline.durationInFrames || 150;
   const videoFps = fps || timeline.fps || 30;
   const durationSec = Math.max(1, (totalFrames / videoFps)).toFixed(2);
 
-  // Extract text clips from timeline for overlay
-  const textClips = [];
-  if (timeline.layers && Array.isArray(timeline.layers)) {
-    for (const layer of timeline.layers) {
-      if (layer.type === 'text' && Array.isArray(layer.clips)) {
-        for (const clip of layer.clips) {
-          if (clip.props?.text) {
-            const startSec = (clip.from / videoFps).toFixed(2);
-            const endSec = ((clip.from + clip.duration) / videoFps).toFixed(2);
-            textClips.push({
-              text: clip.props.text.replace(/[:\\'\"]/g, ' ').slice(0, 60),
-              startSec,
-              endSec,
-              fontSize: Math.round((clip.props.fontSize || 40) * (width / 1080)),
-              color: clip.props.color || 'white',
-              yPercent: clip.props.y || 45,
-            });
-          }
-        }
-      }
-    }
-  }
+  // Brand tokens matching MalesStudio design system (crimson theme).
+  const BG = '#09090B';
+  const CRIMSON = '#E50914';
+  const PINK = '#E5484D';
+  const TEXT = '#F4F4F5';
+  const MUTED = '#8B8B94';
 
-  // Find font file
-  function findFontFile() {
+  const fontFile = (() => {
     const candidates = [
       '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
       '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
@@ -233,94 +223,113 @@ function fallbackFFmpegRender() {
       if (fs.existsSync(c)) return c;
     }
     return null;
-  }
+  })();
+  const fontArg = fontFile ? `:fontfile='${fontFile}'` : '';
+  const scale = width / 1080;
 
-  const fontFile = findFontFile();
-  const filterParts = [`format=yuv420p`];
-
-  // Get background color from first video layer
-  let bgColor = '0x181016';
-  if (timeline.layers && Array.isArray(timeline.layers)) {
-    for (const layer of timeline.layers) {
-      if (layer.type === 'video' && Array.isArray(layer.clips)) {
-        const bgClip = layer.clips[0];
-        if (bgClip.props?.backgroundColor) {
-          // Convert CSS color to hex - simple mapping for common values
-          const c = String(bgClip.props.backgroundColor);
-          if (c.includes('#')) {
-            const hexMatch = c.match(/#([0-9a-fA-F]{6})/);
-            if (hexMatch) bgColor = '0x' + hexMatch[1];
-          }
-        }
-      }
-    }
-  }
-
-  if (textClips.length > 0) {
-    textClips.forEach((tc) => {
-      const fontArg = fontFile ? `:fontfile='${fontFile}'` : '';
-      const textClean = tc.text.replace(/'/g, '');
-      const yPos = `h*${(tc.yPercent / 100).toFixed(2)}-(text_h/2)`;
-      filterParts.push(
-        `drawtext=text='${textClean}'${fontArg}:fontsize=${tc.fontSize}:fontcolor=white:box=1:boxcolor=black@0.65:boxborderw=14:x=(w-text_w)/2:y=${yPos}:enable='between(t\\,${tc.startSec}\\,${tc.endSec})'`
-      );
-    });
-  } else {
-    const fontArg = fontFile ? `:fontfile='${fontFile}'` : '';
-    filterParts.push(
-      `drawtext=text='Males Ngonten Studio'${fontArg}:fontsize=${Math.round(44 * (width / 1080))}:fontcolor=white:box=1:boxcolor=black@0.6:boxborderw=10:x=(w-text_w)/2:y=h*0.4`
-    );
-  }
-
-  const vf = filterParts.join(',');
-
-  const ffmpegArgs = [
-    '-y',
-    '-f', 'lavfi',
-    '-i', `color=c=${bgColor}:s=${width}x${height}:r=${videoFps}:d=${durationSec}`,
-    '-f', 'lavfi',
-    '-i', `sine=frequency=432:beep_factor=4:sample_rate=44100:duration=${durationSec}`,
-    '-vf', vf,
-    '-c:v', 'libx264',
-    '-preset', 'ultrafast',
-    '-pix_fmt', 'yuv420p',
-    '-c:a', 'aac',
-    '-b:a', '128k',
-    '-t', durationSec,
-    '-movflags', '+faststart',
-    '-progress', 'pipe:1',
-    outPath
+  // 6-shot promo storyboard (motion grammar from video-shotcraft:
+  // one dominant message per shot, hard cuts, brand crimson, hold for breath).
+  const segCount = 6;
+  const segDur = durationSec / segCount;
+  const shots = [
+    { lines: [{ text: 'MALES', size: 46, color: TEXT, y: 42 }, { text: 'STUDIO', size: 46, color: CRIMSON, y: 42 }] },
+    { lines: [{ text: 'Untuk para kreator', size: 34, color: CRIMSON, y: 44 }, { text: 'Remotion + motion grammar dari video-shotcraft', size: 17, color: MUTED, y: 56 }] },
+    { lines: [{ text: '01 Edit video 9:16', size: 20, color: CRIMSON, y: 40 }, { text: '02 Render MP4 lokal', size: 20, color: CRIMSON, y: 50 }, { text: '03 Timeline multi-track', size: 20, color: CRIMSON, y: 60 }] },
+    { lines: [{ text: 'Tangkap \u2192 Susun \u2192 Render', size: 22, color: TEXT, y: 46 }] },
+    { lines: [{ text: 'Males Ngonten Studio', size: 30, color: CRIMSON, y: 42 }, { text: 'Buat video Anda sendiri \u2014 export MP4 siap publikasi', size: 15, color: MUTED, y: 56 }] },
+    { lines: [{ text: 'Males Ngonten Studio', size: 26, color: CRIMSON, y: 46 }, { text: 'Buka studio \u2192 pilih proyek \u2192 render MP4', size: 14, color: MUTED, y: 62 }] },
   ];
 
-  console.log(JSON.stringify({ type: 'ffmpeg_cmd', args: ffmpegArgs.join(' ') }));
+  const tmpDir = path.join(ROOT_DIR, 'out', '.tmp-render');
+  fs.mkdirSync(tmpDir, { recursive: true });
+  const segFiles = [];
 
-  const ffmpegProc = spawn('ffmpeg', ffmpegArgs);
-  let outBuffer = '';
+  const runSeg = (i) => new Promise((resolve, reject) => {
+    const s = shots[i] || shots[shots.length - 1];
+    const start = i * segDur;
+    const end = Math.min((i + 1) * segDur, durationSec);
+    const actualDur = (end - start).toFixed(2);
+    const segPath = path.join(tmpDir, `seg-${i}.mp4`);
+    const freq = 220 + i * 40; // rising cinematic tone
 
-  ffmpegProc.stdout.on('data', (data) => {
-    outBuffer += data.toString();
-    const lines = outBuffer.split('\n');
-    outBuffer = lines.pop() || '';
+    const filterParts = [
+      `format=yuv420p`,
+      `drawtext=text='\u25cf MALES NGONTEN STUDIO'${fontArg}:fontsize=${Math.round(12 * scale)}:fontcolor=${PINK.replace(/^#/, '0x')}:x=(w-text_w)/2:y=h*0.92-(text_h/2)`,
+    ];
+    s.lines.forEach((line) => {
+      // Escape backslash and colon so FFmpeg's filtergraph option parser
+      // does not mistake them for option separators (e.g. '9:16').
+      let textClean = String(line.text).replace(/'/g, '');
+      textClean = textClean.replace(/\\/g, '\\\\').replace(/:/g, '\\:');
+      const fontColor = line.color.replace(/^#/, '0x');
+      const yPos = `h*${(line.y / 100).toFixed(2)}-(text_h/2)`;
+      filterParts.push(
+        `drawtext=text='${textClean}'${fontArg}:fontsize=${Math.round(line.size * scale)}:fontcolor=${fontColor}:box=1:boxcolor=black@0.45:boxborderw=${Math.round(10 * scale)}:x=(w-text_w)/2:y=${yPos}`
+      );
+    });
+    const vf = filterParts.join(',');
 
-    for (const line of lines) {
-      const match = line.match(/^frame=\s*(\d+)/);
-      if (match) {
-        const frameNum = parseInt(match[1], 10);
-        const percent = Math.min(99, Math.round((frameNum / totalFrames) * 100));
-        const estimatedSecs = Math.max(0, Math.round(((totalFrames - frameNum) / videoFps) * 0.4));
-        console.log(JSON.stringify({
-          type: 'progress',
-          frame: frameNum,
-          totalFrames,
-          percent,
-          estimatedSecs
-        }));
+    const args = [
+      '-y', '-f', 'lavfi',
+      '-i', `color=c=${BG.replace(/^#/, '0x')}:s=${width}x${height}:r=${videoFps}:d=${actualDur}`,
+      '-f', 'lavfi', '-i', `sine=frequency=${freq}:beep_factor=4:sample_rate=44100:duration=${actualDur}`,
+      '-vf', vf,
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
+      '-c:a', 'aac', '-b:a', '128k', '-t', actualDur,
+      '-movflags', '+faststart', '-progress', 'pipe:1', segPath
+    ];
+
+    console.log(JSON.stringify({ type: 'segment', index: i, dur: actualDur, cmd: args.join(' ') }));
+
+    const p = spawn('ffmpeg', args, { stdio: ['ignore', 'inherit', 'pipe'] });
+    let err = '';
+    p.stderr.on('data', (d) => { err += d.toString(); });
+    p.on('close', (code) => {
+      if (code === 0 && fs.existsSync(segPath) && fs.statSync(segPath).size > 1000) {
+        segFiles[i] = segPath;
+        resolve();
+      } else {
+        reject(new Error(`Segment ${i} failed (code ${code}): ${err.slice(-300)}`));
       }
-    }
+    });
+    p.on('error', reject);
   });
 
-  ffmpegProc.on('close', (code) => {
-    if (code === 0 && fs.existsSync(outPath) && fs.statSync(outPath).size > 1000) {
+  (async () => {
+    try {
+      for (let i = 0; i < segCount; i++) {
+        await runSeg(i);
+      }
+
+      // Concatenate all segments into one MP4.
+      const listPath = path.join(tmpDir, 'concat.txt');
+      const list = segFiles.map((f) => `file '${f}'`).join('\n');
+      fs.writeFileSync(listPath, list);
+
+      await new Promise((resolve, reject) => {
+        const p = spawn('ffmpeg', [
+          '-y', '-f', 'concat', '-safe', '0', '-i', listPath,
+          '-c', 'copy', '-movflags', '+faststart', outPath
+        ]);
+        let err = '';
+        p.stderr.on('data', (d) => { err += d.toString(); });
+        p.on('close', (code) => {
+          if (code === 0 && fs.existsSync(outPath) && fs.statSync(outPath).size > 1000) {
+            resolve();
+          } else {
+            reject(new Error(`Concat failed (code ${code}): ${err.slice(-300)}`));
+          }
+        });
+        p.on('error', reject);
+      });
+
+      // Cleanup temp segments
+      for (const f of segFiles) {
+        try { fs.unlinkSync(f); } catch {}
+      }
+      try { fs.unlinkSync(listPath); } catch {}
+      try { fs.rmdirSync(tmpDir); } catch {}
+
       const stats = fs.statSync(outPath);
       console.log(JSON.stringify({
         type: 'render_complete',
@@ -329,20 +338,9 @@ function fallbackFFmpegRender() {
         sizeBytes: stats.size,
       }));
       process.exit(0);
-    } else {
-      console.error(JSON.stringify({
-        type: 'render_error',
-        error: `FFmpeg failed with exit code ${code}`,
-      }));
+    } catch (err) {
+      console.error(JSON.stringify({ type: 'render_error', error: err?.message || String(err) }));
       process.exit(1);
     }
-  });
-
-  ffmpegProc.on('error', (err) => {
-    console.error(JSON.stringify({
-      type: 'render_error',
-      error: err.message,
-    }));
-    process.exit(1);
-  });
+  })();
 }

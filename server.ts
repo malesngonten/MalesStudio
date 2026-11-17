@@ -94,33 +94,98 @@ let CHECKPOINTS_INDEX_PATH = path.join(CHECKPOINTS_DIR, 'index.json');
 const PROJECTS_INDEX_PATH = path.join(PROJECTS_BASE, 'projects.json');
 const SCRIPTS_DIR = path.join(WORKSPACE_DIR, 'scripts');
 const REMOCN_CATALOG_PATH = path.join(WORKSPACE_DIR, 'src', 'remotion', 'elements', 'remocn-catalog.json');
+const AGENT_TASKS_DIR = path.join(WORKSPACE_DIR, '.males_ngonten', 'agent-tasks');
 
 // Ensure base project directories exist
-[PROJECTS_BASE, ACTIVE_PROJECT_DIR, OUT_DIR, ASSETS_DIR, CHATS_DIR, CHECKPOINTS_DIR, path.join(ACTIVE_PROJECT_DIR, 'src'), SCRIPTS_DIR].forEach((dir) => {
+[PROJECTS_BASE, ACTIVE_PROJECT_DIR, OUT_DIR, ASSETS_DIR, CHATS_DIR, CHECKPOINTS_DIR, path.join(ACTIVE_PROJECT_DIR, 'src'), SCRIPTS_DIR, AGENT_TASKS_DIR].forEach((dir) => {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
 });
 
 // Initialize git repo for real checkpoints
-function ensureGitRepo() {
-  const gitDir = path.join(ACTIVE_PROJECT_DIR, '.git');
+function ensureGitRepo(targetDir?: string) {
+  const dir = targetDir || ACTIVE_PROJECT_DIR;
+  const gitDir = path.join(dir, '.git');
   if (!fs.existsSync(gitDir)) {
-    const initResult = spawnSync('git', ['init'], { cwd: ACTIVE_PROJECT_DIR, encoding: 'utf-8' });
+    const initResult = spawnSync('git', ['init'], { cwd: dir, encoding: 'utf-8' });
     if (initResult.status === 0) {
-      console.log('[Git] Repository diinisialisasi di', ACTIVE_PROJECT_DIR);
+      console.log('[Git] Repository diinisialisasi di', dir);
     } else {
       console.warn('[Git] Gagal inisialisasi repo:', initResult.stderr || initResult.stdout);
     }
   }
   // Set safe.directory for git in proot/Termux
-  spawnSync('git', ['config', '--global', '--add', 'safe.directory', ACTIVE_PROJECT_DIR], { encoding: 'utf-8' });
-  spawnSync('git', ['config', 'user.name', 'Males Ngonten Agent'], { cwd: ACTIVE_PROJECT_DIR, encoding: 'utf-8' });
-  spawnSync('git', ['config', 'user.email', 'agent@malesngonten.studio'], { cwd: ACTIVE_PROJECT_DIR, encoding: 'utf-8' });
+  spawnSync('git', ['config', '--global', '--add', 'safe.directory', dir], { encoding: 'utf-8' });
+  spawnSync('git', ['config', 'user.name', 'Males Ngonten Agent'], { cwd: dir, encoding: 'utf-8' });
+  spawnSync('git', ['config', 'user.email', 'agent@malesngonten.studio'], { cwd: dir, encoding: 'utf-8' });
 }
 
 ensureGitRepo();
 
+// ========================================================
+// AGENT TASK PERSISTENCE (untuk resume setelah browser ditutup)
+// ========================================================
+
+interface AgentTaskState {
+  projectId: string;
+  sessionId: string;
+  userPrompt: string;
+  status: 'thinking' | 'executing_tool' | 'waiting_user' | 'completed' | 'failed';
+  currentStep: string;
+  toolCalls: any[];
+  completedToolCalls: any[];
+  updatedAt: number;
+}
+
+function saveAgentTask(projectId: string, task: Partial<AgentTaskState>) {
+  const dir = path.join(AGENT_TASKS_DIR, projectId);
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    const taskFile = path.join(dir, 'task.json');
+    const existing = fs.existsSync(taskFile) ? JSON.parse(fs.readFileSync(taskFile, 'utf-8')) : {};
+    const fullTask: AgentTaskState = {
+      projectId,
+      sessionId: existing.sessionId || '',
+      userPrompt: existing.userPrompt || '',
+      status: 'thinking',
+      currentStep: '',
+      toolCalls: [],
+      completedToolCalls: [],
+      ...existing,
+      ...task,
+      updatedAt: Date.now(),
+    };
+    fs.writeFileSync(taskFile, JSON.stringify(fullTask, null, 2), 'utf-8');
+  } catch (err) {
+    console.warn('[AgentTask] Gagal menyimpan task:', err);
+  }
+}
+
+function loadAgentTask(projectId: string): AgentTaskState | null {
+  try {
+    const taskFile = path.join(AGENT_TASKS_DIR, projectId, 'task.json');
+    if (fs.existsSync(taskFile)) {
+      return JSON.parse(fs.readFileSync(taskFile, 'utf-8'));
+    }
+  } catch (err) {
+    console.warn('[AgentTask] Gagal memuat task:', err);
+  }
+  return null;
+}
+
+function clearAgentTask(projectId: string) {
+  try {
+    const taskFile = path.join(AGENT_TASKS_DIR, projectId, 'task.json');
+    if (fs.existsSync(taskFile)) {
+      fs.unlinkSync(taskFile);
+    }
+  } catch (err) {
+    console.warn('[AgentTask] Gagal menghapus task:', err);
+  }
+}
+
+// ========================================================
 // Load checkpoints from index on startup
 let gitCheckpoints: {
   hash: string;
@@ -589,6 +654,9 @@ function seedProjectFiles(dir: string, project: ServerProject): void {
   if (!fs.existsSync(compositionFile) || fs.statSync(compositionFile).size === 0) {
     fs.writeFileSync(compositionFile, DEFAULT_COMPOSITION, 'utf-8');
   }
+
+  // Inisialisasi git repo agar project baru siap checkpoints segera setelah dibuat
+  ensureGitRepo(dir);
 }
 
 function setActiveProjectDir(id: string): boolean {
@@ -607,7 +675,7 @@ function setActiveProjectDir(id: string): boolean {
   compPath = path.join(dir, 'src', 'Composition.tsx');
 
   ensureProjectFolders(dir);
-  ensureGitRepo();
+  ensureGitRepo(dir);
 
   // Load checkpoints belonging to the newly active project.
   gitCheckpoints = [];
@@ -623,11 +691,10 @@ function setActiveProjectDir(id: string): boolean {
 
 function readWorkspaceForProject(id: string) {
   const dir = projectDirFor(id);
-  const config = PROJECT_ASPECTS['9:16'];
   let timeline: any = { ...DEFAULT_TIMELINE, layers: [] };
   let assets: any[] = [];
   let files: Record<string, string> = {};
-  let settings: any = { aspectRatio: '9:16', fps: config.fps, durationInFrames: config.durationInFrames };
+  let settings: any = { aspectRatio: '9:16', fps: 30, durationInFrames: 150 };
 
   try {
     const timelineFile = path.join(dir, 'timeline.json');
@@ -670,6 +737,7 @@ function readWorkspaceForProject(id: string) {
   collectDir(path.join(dir, 'src', 'components'), 'src/components');
 
   const project = readProjectsIndex().find((p) => p.id === id);
+  const config = project ? (PROJECT_ASPECTS[project.aspectRatio] || PROJECT_ASPECTS['9:16']) : PROJECT_ASPECTS['9:16'];
   settings = {
     aspectRatio: project?.aspectRatio || '9:16',
     width: project?.width || config.width,
@@ -3330,7 +3398,10 @@ app.post('/api/agent/prompt', async (req, res) => {
       // Dual-mode system prompt:
       // - CHAT mode: greetings/general questions → plain text response, no tools
       // - EDIT/ACT mode: video production requests → JSON with tool calls (file ops, terminal, render)
-      const isVideoTask = isVideoCreationRequest(text || '');
+      const isEmptyProject = !timelineHasContent(currentTimelineData);
+      // Saat project baru (timeline kosong), AI harus otomatis masuk ke mode pembuatan video
+      // tanpa menunggu kata kunci spesifik dari user.
+      const isVideoTask = isVideoCreationRequest(text || '') || isEmptyProject;
       const timelineJsonForPrompt = JSON.stringify(currentTimelineData, null, 2);
       const timelinePromptText =
         timelineJsonForPrompt.length > 30_000
@@ -3403,6 +3474,13 @@ INSTALASI DEPENDENSI (boleh dilakukan AI):
 - Setelah pemasangan, verifikasi paket bisa diimpor sebelum menulis komponen yang menggunakannya.
 - Jangan memasang paket yang mencurigakan atau mencuri data; periksa dulu isi paket jika memungkinkan.
 
+PROJECT BARU (TIMELINE KOSONG) — WAJIB DIPATUHI:
+- Jika timeline masih kosong (layers: [] atau semua clip kosong), berarti project BARU DIBUAT dan belum ada konten apa pun.
+- Jika user mengirim pesan APAPUN di chat saat project baru, AI WAJIB segera membuat video, TIDAK boleh cuma ngomong-ngomong atau menunggu instruksi lebih lanjut.
+- AI harus langsung menulis timeline.json dengan minimal 1 layer visual dan 1 layer teks, serta komponen Remotion di src/Composition.tsx.
+- Jangan balas dengan "Siap, saya akan membantu" atau "Apa yang ingin Anda buat?" — langsung implementasi.
+- Gunakan komponen dari katalog remocn (lihat daftar di atas) atau buat komponen baru di src/components/.
+
 COMPONENT EDITING MODEL (instance vs blueprint) — WAJIB DIPATUHI:
 Setiap clip elemen punya tiga field penting di timeline.json:
 - elementSlug  → referensi ke komponen library remocn (blueprint asli, JANGAN diedit)
@@ -3426,6 +3504,22 @@ Decision tree:
 3. Perubahan komposisi multi-elemen (teks tambahan muncul di bawah, layer baru, timing terpisah)
    → tambah/ubah clip & layer di timeline.json (modifyTimeline atau writeFile timeline.json).
 4. Ragu antara (1) dan (2): cek propsSchema komponen dulu; jika prop tersedia → jalur (1).
+
+KOMPONEN LIBRARY (remocn) — ATURAN WAJIB UNTUK MENGANADAI TIMELINE BARU:
+- Jika user ingin mengubah tampilan/animasi komponen yang SUDAH ADA di timeline (mis. logo, teks, kartu fitur),
+  JANGAN membuat klip baru di timeline.json. Langsung EDIT komponen yang sudah ada.
+- Sebelum mengedit tampilan komponen library, WAJIB fork dulu ke src/components/<slug>.element.tsx
+  (panggil forkElementComponent jika clip belum punya elementFile).
+- Setelah fork, WAJIB baca file hasil fork (readFile) sebelum mengedit.
+- Edit hanya file fork (src/components/*.element.tsx), JANGAN mengedit file asli di
+  src/remotion/elements/remocn/** (di luar project & global).
+- Jika perubahan hanya mencakup props yang tersedia di propsSchema komponen → gunakan
+  modifyTimeline (update elementProps), JANGAN edit kode.
+- Jika perubahan butuh struktur baru/animasi baru yang tidak ada di propsSchema → edit kode file fork.
+- Setelah edit kode, clip tetap menggunakan elementFile yang sama; tidak perlu ubah timeline
+  kecuali durasi/posisi/props instance.
+- JANGAN membuat klip baru di timeline untuk meniru komponen library yang sudah ada. Edit komponen
+  yang sudah ada di timeline.
 
 PROJECT STRUCTURE (relative ke folder project aktif — jangan hardcode nama project):
 - timeline.json                    - Timeline definition (layers, clips, durations)
@@ -3558,6 +3652,7 @@ CAPABILITY ANSWERS:
 - Saat user bertanya akses internet, jawab bahwa kamu punya webSearch/webRead dan jelaskan cara kerjanya. Jangan menjawab tidak bisa.
 
 MODE SELECTION:
+- Jika project BARU (timeline kosong, belum ada konten) → AI WAJIB masuk ke mode pembuatan video, TIDAK boleh cuma ngomong-ngomong atau plain text. Langsung buat komponen dan timeline dengan toolCalls.
 - If user says hello/greeting/pure chat → plain text response in Indonesian, NO tools, NO JSON.
 - If user asks a question about capability/tools/internet → plain text answer derived from the actual tool list above. Do not call tools just to answer a capability question.
 - If user asks to search the internet/find information → use webSearch/webRead, then answer directly in Indonesian with sources. Do not include tool JSON in the final answer.
@@ -3570,6 +3665,9 @@ MODE SELECTION:
 - ATURAN WAJIB: Setiap balasan HARUS berisi toolCalls ATAU jawaban final. Jangan menulis 'saya akan melakukan X' tanpa toolCalls untuk X di balasan yang sama.
 - Saat menjawab hasil riset, tulis jawaban langsung dan natural dalam bahasa Indonesia. Jangan menampilkan "ronde", "tool call", stdout/stderr, exitCode, HTML mentah, atau laporan proses internal. Sertakan URL sumber bila relevan.
 - Jika hasil riset tidak cukup, katakan apa yang ditemukan dan apa yang belum, tanpa mengarang.
+
+PROJECT STATUS:
+- ${isEmptyProject ? 'PROJECT BARU — Timeline masih kosong (belum ada konten). AI WAJIB segera membuat video dengan toolCalls, jangan cuma ngomong-ngomong.' : 'Project sudah memiliki konten timeline.'}
 
 Current timeline:
 ${timelinePromptText}
@@ -3970,26 +4068,18 @@ User request:
           }
 
           const RESEARCH_TOOL_BUDGET = 12;
-          const MAX_ROUNDS = isVideoTask ? 18 : 8;
           let currentRound = 1;
+          // Tidak ada batasan jumlah ronde — AI yang memutuskan kapan tugas selesai
           let lastFollowUpText = '';
           let lastNormalized: NormalizedAIResponse | null = null;
           let nudgeCount = 0;
-          let implementationNudges = 0;
-          let blockedResearchNudges = 0;
           let callErr: Error | null = null;
 
-          // Multi-turn loop
-          while (currentRound <= MAX_ROUNDS) {
-            const forceImplementationNow =
-              isVideoTask &&
-              !timelineWritten &&
-              (researchCallsMade >= RESEARCH_TOOL_BUDGET || currentRound >= 7);
-            const forceTextOnly = !isVideoTask && currentRound === MAX_ROUNDS;
-            const forceLastChance = currentRound === MAX_ROUNDS;
+          // Multi-turn loop (bebas, AI yang memutuskan kapan selesai)
+          while (currentRound <= 100) {
 
             console.log(
-              `[MULTI-TURN] Round ${currentRound}/${MAX_ROUNDS} - videoTask=${isVideoTask} timelineWritten=${timelineWritten} writes=${writesExecuted} researchCalls=${researchCallsMade} forceImplement=${forceImplementationNow} tools=${allToolResults.size}`
+              `[MULTI-TURN] Round ${currentRound} - videoTask=${isVideoTask} timelineWritten=${timelineWritten} writes=${writesExecuted} researchCalls=${researchCallsMade} tools=${allToolResults.size}`
             );
 
             // Build accumulated tool results for prompt (C: akumulasi, potong 8000 per hasil, total ~24000)
@@ -4018,9 +4108,7 @@ User request:
             const implementationStatus = isVideoTask
               ? timelineWritten
                 ? `- Timeline sudah berisi konten. Lanjutkan perbaikan/render jika perlu, atau berikan ringkasan akhir yang singkat.`
-                : forceImplementationNow || forceLastChance
-                  ? `- FASE RISET SELESAI. DILARANG memanggil webSearch/webRead/repoResearch/repoReadFile/repoListFiles/repoSearchFiles lagi. WAJIB implementasi SEKARANG: panggil writeFile untuk timeline.json (dan komponen bila perlu). Jangan menjawab dengan analisis atau rencana.`
-                  : `- Ini tugas VIDEO. Riset hanya persiapan. Setelah data cukup, WAJIB lanjut menulis komponen/timeline. Jangan berhenti dengan analisis.`
+                : `- Ini tugas VIDEO. Lanjut menulis komponen/timeline sampai selesai. Jangan berhenti dengan analisis jika tugas belum selesai.`
               : '';
 
             // Build follow-up messages
@@ -4029,17 +4117,14 @@ User request:
                 role: 'system',
                 content:
                   systemPrompt +
-                  `\n\nMULTI-TURN RONDE ${currentRound}/${MAX_ROUNDS}:\n` +
+                  `\n\nMULTI-TURN RONDE ${currentRound}:\n` +
                   `- Hasil tool dari ronde sebelumnya sudah dieksekusi (total ${allToolResults.size} tool dieksekusi sejauh ini).\n` +
                   `- Gunakan SEMUA data akumulasi di bawah untuk melanjutkan tugas user.\n` +
                   `- Jika perlu modifikasi file, balas JSON toolCalls. Jika tugas sudah selesai, balas plain text bahasa Indonesia yang ringkas.\n` +
                   (noToolYet && isVideoTask
                     ? `- Respons awal hanya berisi analisis/rencana. JANGAN mengulanginya. Langsung implementasi dengan toolCalls.\n`
                     : '') +
-                  (implementationStatus ? `${implementationStatus}\n` : '') +
-                  (forceTextOnly
-                    ? `- INI RONDE TERAKHIR. JANGAN panggil tool lagi. Berikan jawaban final plain text bahasa Indonesia.`
-                    : ''),
+                  (implementationStatus ? `${implementationStatus}\n` : ''),
               },
               { role: 'user', content: text },
               {
@@ -4064,12 +4149,8 @@ User request:
                   (isVideoTask
                     ? timelineWritten
                       ? 'Lanjutkan bila masih ada yang perlu diperbaiki. Jika selesai, beri ringkasan singkat dalam plain text (bukan JSON).'
-                      : forceImplementationNow || forceLastChance
-                        ? 'SEKARANG implementasi. Balas HANYA JSON toolCalls berisi writeFile untuk komponen/timeline. Timeline WAJIB berisi layer dan clip. Jangan menulis analisis.'
-                        : 'Lanjutkan tugas video. Jika riset sudah cukup, tulis komponen/timeline sekarang. Jangan berhenti pada analisis.'
-                    : forceTextOnly
-                      ? 'Jelaskan hasil akhir berdasarkan data di atas dalam bahasa Indonesia (plain text, BUKAN JSON).'
-                      : 'Lanjutkan tugas user. Jika perlu modifikasi file, balas JSON toolCalls. Jika hanya penjelasan, balas plain text bahasa Indonesia.'),
+                      : 'Lanjutkan tugas video. Jika riset sudah cukup, tulis komponen/timeline sekarang. Jangan berhenti pada analisis.'
+                    : 'Lanjutkan tugas user. Jika perlu modifikasi file, balas JSON toolCalls. Jika hanya penjelasan, balas plain text bahasa Indonesia.'),
               },
             ];
 
@@ -4078,8 +4159,7 @@ User request:
             broadcastSSE('agent_status', {
               status: 'thinking',
               round: currentRound,
-              maxRounds: MAX_ROUNDS,
-              note: `Menganalisis hasil (ronde ${currentRound}/${MAX_ROUNDS})`
+              note: `Menganalisis hasil (ronde ${currentRound})`
             });
 
             let followUpText = '';
@@ -4133,29 +4213,15 @@ User request:
               // Untuk tugas video, teks sebelum timeline dibuat adalah analisis —
               // jangan diterima sebagai jawaban final.
               if (isVideoTask && !timelineWritten) {
-                implementationNudges++;
-                console.log(
-                  `[MULTI-TURN] Round ${currentRound} - video task but no timeline yet (nudge ${implementationNudges})`
+                followUpMessages.push(
+                  { role: 'assistant', content: cleaned },
+                  {
+                    role: 'user',
+                    content:
+                      'Analisis/ringkasan di atas BUKAN hasil akhir. User meminta video. JANGAN mengulang analisis. Sekarang balas HANYA JSON toolCalls yang berisi writeFile untuk komponen (jika perlu) dan writeFile timeline.json yang berisi layer + clip nyata. Timeline kosong tidak diterima.',
+                  }
                 );
-                if (implementationNudges <= 5) {
-                  followUpMessages.push(
-                    { role: 'assistant', content: cleaned },
-                    {
-                      role: 'user',
-                      content:
-                        'Analisis/ringkasan di atas BUKAN hasil akhir. User meminta video. JANGAN mengulang analisis. Sekarang balas HANYA JSON toolCalls yang berisi writeFile untuk komponen (jika perlu) dan writeFile timeline.json yang berisi layer + clip nyata. Timeline kosong tidak diterima.',
-                    }
-                  );
-                  continue;
-                }
-
-                const fallbackTimeline = readTimelineFromDisk();
-                const completion = buildCompletionMessage(true, fallbackTimeline, writesExecuted);
-                aiMessage.content = completion;
-                aiMessage.text = completion;
-                aiMessage.status = timelineHasContent(fallbackTimeline) ? 'completed' : 'failed';
-                multiTurnHandled = true;
-                break;
+                continue;
               }
 
               const completion = finalizeText(cleaned, isVideoTask, readTimelineFromDisk(), writesExecuted);
@@ -4175,27 +4241,16 @@ User request:
               if (!normalized?.toolCalls?.length) {
                 console.log(`[MULTI-TURN] Round ${currentRound} - JSON without toolCalls`);
                 if (isVideoTask && !timelineWritten) {
-                  implementationNudges++;
-                  if (implementationNudges <= 5) {
-                    const draftSummary = normalized.summary || 'Analisis selesai.';
-                    followUpMessages.push(
-                      { role: 'assistant', content: draftSummary },
-                      {
-                        role: 'user',
-                        content:
-                          'Ringkasan/analisis di atas BUKAN hasil akhir. User meminta video. Sekarang balas HANYA JSON toolCalls: writeFile timeline.json dengan layer + clip nyata (dan writeFile komponen jika mengadaptasi repository). Jangan mengembalikan toolCalls kosong.',
+                  const draftSummary = normalized.summary || 'Analisis selesai.';
+                  followUpMessages.push(
+                    { role: 'assistant', content: draftSummary },
+                    {
+                      role: 'user',
+                      content:
+                        'Ringkasan/analisis di atas BUKAN hasil akhir. User meminta video. Sekarang balas HANYA JSON toolCalls: writeFile timeline.json dengan layer + clip nyata (dan writeFile komponen jika mengadaptasi repository). Jangan mengembalikan toolCalls kosong.',
                       }
                     );
-                    continue;
-                  }
-
-                  const fallbackTimeline = readTimelineFromDisk();
-                  const completion = buildCompletionMessage(true, fallbackTimeline, writesExecuted);
-                  aiMessage.content = completion;
-                  aiMessage.text = completion;
-                  aiMessage.status = timelineHasContent(fallbackTimeline) ? 'completed' : 'failed';
-                  multiTurnHandled = true;
-                  break;
+                  continue;
                 }
 
                 const summaryText = finalizeText(
@@ -4221,34 +4276,6 @@ User request:
                 // Semua tool selain WRITE_TOOLS bersifat read-only (file, web, repo,
                 // searchElements) sehingga aman di-dedupe dalam satu permintaan.
                 const isReadOnly = !isWriteTool;
-
-                // Fase implementasi: blokir riset eksternal agar AI tidak berputar
-                // di repository/search dan benar-benar menulis video.
-                if (forceImplementationNow && EXTERNAL_RESEARCH_TOOLS.has(tc.tool)) {
-                  blockedResearchNudges++;
-                  const blockedResult = {
-                    error:
-                      'Batas riset tercapai. Jangan panggil tool riset lagi. Implementasikan sekarang dengan writeFile timeline.json (dan komponen bila perlu).',
-                  };
-                  newToolResults.push({
-                    tool: tc.tool,
-                    path: toolTarget(tc),
-                    result: blockedResult,
-                  });
-                  const blockedCall: any = {
-                    id: `tc-blocked-${currentRound}-${tc.tool}-${Date.now()}`,
-                    toolName: tc.tool,
-                    description: `Diblokir: batas riset tercapai`,
-                    arguments: tc,
-                    target: toolTarget(tc),
-                    status: 'failed',
-                    error: blockedResult.error,
-                    timestamp: new Date().toISOString(),
-                  };
-                  aiMessage.toolCalls.push(blockedCall);
-                  broadcastSSE('tool_update', { messageId: aiMsgId, toolCall: blockedCall });
-                  continue;
-                }
 
                 if (seenTools.has(sig)) {
                   if (isReadOnly) {
@@ -4295,6 +4322,22 @@ User request:
                   broadcastSSE('tool_update', { messageId: aiMsgId, toolCall });
 
                   newToolResults.push({ tool: tc.tool, path: toolTarget(tc), result });
+
+                  // Save agent task state for resume capability
+                  try {
+                    const projId = ACTIVE_PROJECT_DIR.replace(PROJECTS_BASE + '/', '');
+                    saveAgentTask(projId, {
+                      projectId: projId,
+                      sessionId: activeSessionId || '',
+                      userPrompt: text,
+                      status: 'executing_tool',
+                      currentStep: `Eksekusi ${tc.tool}`,
+                      toolCalls: aiMessage.toolCalls,
+                      completedToolCalls: [
+                        ...aiMessage.toolCalls.filter(t => t.status === 'completed').map(t => ({ tool: t.tool, result: t.result }))
+                      ],
+                    });
+                  } catch {}
 
                   if (!result?.error && WRITE_TOOLS.has(tc.tool)) {
                     writesExecuted++;
@@ -4343,6 +4386,22 @@ User request:
                   toolCall.error = err?.message || String(err);
                   broadcastSSE('tool_update', { messageId: aiMsgId, toolCall });
                   newToolResults.push({ tool: tc.tool, path: toolTarget(tc), result: { error: err?.message || String(err) } });
+
+                  // Save agent task state even on error
+                  try {
+                    const projId = ACTIVE_PROJECT_DIR.replace(PROJECTS_BASE + '/', '');
+                    saveAgentTask(projId, {
+                      projectId: projId,
+                      sessionId: activeSessionId || '',
+                      userPrompt: text,
+                      status: 'executing_tool',
+                      currentStep: `Gagal: ${tc.tool}`,
+                      toolCalls: aiMessage.toolCalls,
+                      completedToolCalls: [
+                        ...aiMessage.toolCalls.filter(t => t.status === 'completed').map(t => ({ tool: t.tool, result: t.result }))
+                      ],
+                    });
+                  } catch {}
                 }
               }
 
@@ -4352,26 +4411,9 @@ User request:
                 allToolResults.set(sig, { ...r, round: currentRound });
               }
 
-              // If this was the last round and AI still wants tools, finalize with
-              // the real timeline state. Jangan pernah mengarang hasil pencarian.
-              if (currentRound === MAX_ROUNDS) {
-                console.log(`[MULTI-TURN] Round ${currentRound} (MAX) - finalizing`);
-                const finalTimeline = readTimelineFromDisk();
-                const completion = finalizeText(
-                  normalized.summary || '',
-                  isVideoTask,
-                  finalTimeline,
-                  writesExecuted
-                );
-                aiMessage.content = completion;
-                aiMessage.text = completion;
-                aiMessage.status =
-                  isVideoTask && !timelineHasContent(finalTimeline) ? 'failed' : 'completed';
-                multiTurnHandled = true;
-                break;
-              }
-
-              // Otherwise continue to next round
+              // Jika AI tidak mengembalikan toolCalls lagi (plain text),
+              // loop akan berakhir melalui finalizeText di atas.
+              // AI yang memutuskan kapan selesai.
               currentRound++;
             } catch {
               console.log(`[MULTI-TURN] Round ${currentRound} - JSON parse/normalize failed`);
@@ -4394,6 +4436,25 @@ User request:
               aiMessage.text = completion;
               aiMessage.status =
                 isVideoTask && !timelineHasContent(finalTimeline) ? 'failed' : 'completed';
+              
+              // Save final task state
+              try {
+                const projId = ACTIVE_PROJECT_DIR.replace(PROJECTS_BASE + '/', '');
+                saveAgentTask(projId, {
+                  projectId: projId,
+                  sessionId: activeSessionId || '',
+                  userPrompt: text,
+                  status: aiMessage.status,
+                  currentStep: 'Selesai',
+                  toolCalls: aiMessage.toolCalls,
+                  completedToolCalls: aiMessage.toolCalls.filter(t => t.status === 'completed').map(t => ({ tool: t.tool, result: t.result })),
+                });
+                
+                if (aiMessage.status === 'completed') {
+                  clearAgentTask(projId);
+                }
+              } catch {}
+              
               multiTurnHandled = true;
             } else {
               const errMsg =
@@ -4822,6 +4883,51 @@ app.post('/api/projects/:id/activate', (req, res) => {
     writeProjectsIndex(projects);
   }
   res.json({ success: true, project: projects.find((p) => p.id === id) || null });
+});
+
+// GET /api/projects/:id/agent-task - Get saved agent task state
+app.get('/api/projects/:id/agent-task', (req, res) => {
+  const { id } = req.params;
+  const task = loadAgentTask(id);
+  if (!task) {
+    return res.status(404).json({ error: 'No active task found' });
+  }
+  res.json({ success: true, task });
+});
+
+// POST /api/projects/:id/agent-task/resume - Resume a paused agent task
+app.post('/api/projects/:id/agent-task/resume', async (req, res) => {
+  const { id } = req.params;
+  const task = loadAgentTask(id);
+  if (!task) {
+    return res.status(404).json({ error: 'No active task found' });
+  }
+  // Mark as resuming
+  saveAgentTask(id, { status: 'executing_tool', currentStep: 'Melanjutkan tugas...' });
+  res.json({ success: true, task, message: 'Task ready to resume' });
+});
+
+// POST /api/projects/:id/agent-task/save - Save agent task progress
+app.post('/api/projects/:id/agent-task/save', (req, res) => {
+  const { id } = req.params;
+  const { status, currentStep, toolCalls, completedToolCalls, sessionId, userPrompt } = req.body || {};
+  saveAgentTask(id, {
+    projectId: id,
+    sessionId: sessionId || '',
+    userPrompt: userPrompt || '',
+    status: status || 'executing_tool',
+    currentStep: currentStep || '',
+    toolCalls: toolCalls || [],
+    completedToolCalls: completedToolCalls || [],
+  });
+  res.json({ success: true });
+});
+
+// DELETE /api/projects/:id/agent-task - Clear completed/failed task
+app.delete('/api/projects/:id/agent-task', (req, res) => {
+  const { id } = req.params;
+  clearAgentTask(id);
+  res.json({ success: true });
 });
 
 app.patch('/api/projects/:id', (req, res) => {

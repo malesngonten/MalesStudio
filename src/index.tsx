@@ -7,6 +7,7 @@
 import React from 'react';
 import { Composition, registerRoot } from 'remotion';
 import { ShortVideoComposition } from './remotion/ShortVideoComposition';
+import { PromoComposition } from './remotion/PromoComposition';
 import { INITIAL_STUDIO_TIMELINE } from './state/initialTimeline';
 
 export const RemotionRoot: React.FC = () => {
@@ -20,6 +21,14 @@ export const RemotionRoot: React.FC = () => {
         width={1080}
         height={1920}
         defaultProps={{ timeline: INITIAL_STUDIO_TIMELINE }}
+      />
+      <Composition
+        id="promo"
+        component={PromoComposition as any}
+        durationInFrames={360}
+        fps={30}
+        width={1080}
+        height={1920}
       />
     </>
   );

@@ -91,6 +91,7 @@ export default function App() {
     }
   });
   const [pendingSendPrompt, setPendingSendPrompt] = useState<string | null>(null);
+  const [pendingAgentTask, setPendingAgentTask] = useState<any | null>(null);
 
   const {
     timeline,
@@ -631,9 +632,50 @@ export default function App() {
       setActiveProject(project);
       setActiveProjectId(projectId);
       setShowDashboard(false);
+
+      // Check for pending agent task
+      try {
+        const res = await fetch(`/api/projects/${projectId}/agent-task`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.task) {
+            setPendingAgentTask(data.task);
+            showToast('Tugas AI sebelumnya belum selesai. Silakan lanjutkan.');
+          }
+        }
+      } catch {}
     },
     [activeProjectId, saveProjectWorkspace, showToast]
   );
+
+  const handleResumeAgentTask = useCallback(async () => {
+    if (!activeProjectId || !pendingAgentTask) return;
+    try {
+      const res = await fetch(`/api/projects/${activeProjectId}/agent-task/resume`, {
+        method: 'POST',
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setPendingAgentTask(null);
+        // Re-send the prompt to AI to resume
+        const resumePrompt = `[RESUME TASK] Lanjutkan tugas sebelumnya: ${pendingAgentTask.userPrompt}\n\nLangkah terakhir: ${pendingAgentTask.currentStep}\nTool calls yang sudah selesai: ${JSON.stringify(pendingAgentTask.completedToolCalls || [])}\nLanjutkan dari titik terakhir.`;
+        handleSendMessage(resumePrompt, []);
+        showToast('Tugas dilanjutkan.');
+      } else {
+        showToast('Gagal melanjutkan tugas.');
+      }
+    } catch (e) {
+      console.error('Failed to resume task:', e);
+      showToast('Gagal melanjutkan tugas.');
+    }
+  }, [activeProjectId, pendingAgentTask, handleSendMessage]);
+
+  const handleCancelAgentTask = useCallback(() => {
+    if (!activeProjectId) return;
+    fetch(`/api/projects/${activeProjectId}/agent-task`, { method: 'DELETE' });
+    setPendingAgentTask(null);
+    showToast('Tugas dibatalkan.');
+  }, [activeProjectId]);
 
   const handleCreateProject = useCallback(
     async (
@@ -656,17 +698,6 @@ export default function App() {
       const trimmed = prompt.trim();
       if (!trimmed) return;
 
-      const aiConfigured = Boolean(agentSettings.apiBaseUrl && agentSettings.modelId);
-      if (!aiConfigured || !isBackendAvailable) {
-        try {
-          localStorage.setItem('males_studio_pending_prompt', trimmed);
-        } catch {}
-        setPendingAIPrompt(trimmed);
-        setShowDashboard(true);
-        setIsSettingsOpen(true);
-        return;
-      }
-
       try {
         const name = trimmed.length > 52 ? `${trimmed.slice(0, 52)}…` : trimmed;
         const project = await projectService.createProject(name, aspectRatio, trimmed);
@@ -674,10 +705,33 @@ export default function App() {
         setActiveProject(project);
         setActiveProjectId(project.id);
         setShowDashboard(false);
-        setPendingSendPrompt(trimmed);
+
+        const aiConfigured = Boolean(agentSettings.apiBaseUrl && agentSettings.modelId);
+        if (!aiConfigured || !isBackendAvailable) {
+          // Simpan prompt untuk diproses setelah AI dikonfigurasi
+          try {
+            localStorage.setItem('males_studio_pending_prompt', trimmed);
+          } catch {}
+          setPendingAIPrompt(trimmed);
+          showToast('Project dibuat. Silakan atur API AI di Pengaturan untuk otomatis generate konten.');
+          return;
+        }
+
+        // Tambahkan konteks khusus: ini project baru yang dibuat melalui chat dashboard.
+        // AI WAJIB langsung membuat konten video (timeline + komponen), bukan cuma ngomong-ngomong.
+        const promptWithContext =
+          `[PROJECT BARU VIA CHAT DASHBOARD] ${trimmed}\n\nInstruksi untuk AI: Project baru baru saja dibuat dengan timeline kosong. Langsung buat konten video sesuai permintaan di atas. Tulis timeline.json dengan minimal 1 layer visual dan 1 layer teks, dan tulis komponen Remotion di src/Composition.tsx. Jangan hanya memberikan jawaban teks atau analisis — hasil akhir WAJIB berupa file timeline.json dan src/Composition.tsx yang sudah berisi konten video.`;
+
+        // Tunggu workspace dimuat baru baru kirim prompt ke AI
+        setPendingSendPrompt(promptWithContext);
+
+        // Kirim prompt ke AI agent setelah workspace siap
+        setTimeout(() => {
+          handleSendMessage(promptWithContext, []);
+        }, 1500);
       } catch (e) {
         console.error('Failed to create project with AI:', e);
-        showToast('Gagal membuat project AI. Silakan coba lagi.');
+        showToast('Gagal membuat project. Silakan coba lagi.');
       }
     },
     [agentSettings.apiBaseUrl, agentSettings.modelId, isBackendAvailable, showToast]
@@ -742,25 +796,19 @@ export default function App() {
   // Once the new project workspace has finished loading, run the saved prompt
   // through the AI Agent exactly once.
   useEffect(() => {
-    if (
-      !pendingSendPrompt ||
-      !activeProjectId ||
-      isLoadingProject ||
-      loadedProjectId !== activeProjectId
-    ) {
+    if (!pendingSendPrompt || !activeProjectId || isLoadingProject) {
       return undefined;
     }
     const prompt = pendingSendPrompt;
     setPendingSendPrompt(null);
     const timer = setTimeout(() => {
       handleSendMessage(prompt, []);
-    }, 500);
+    }, 800);
     return () => clearTimeout(timer);
   }, [
     pendingSendPrompt,
     activeProjectId,
     isLoadingProject,
-    loadedProjectId,
     handleSendMessage,
   ]);
 
@@ -904,6 +952,50 @@ export default function App() {
 
   return (
     <div className="w-full h-dvh max-h-dvh flex flex-col bg-[#09090b] text-[#f4f4f5] antialiased overflow-hidden select-none font-sans">
+      {/* Agent Task Resume Notification */}
+      {pendingAgentTask && (
+        <div className="fixed top-0 left-0 right-0 z-50 bg-amber-900 border border-amber-400 p-4">
+          <div className="max-w-7xl mx-auto flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div className="flex items-start gap-3">
+              <div className="flex-shrink-0">
+                <svg className="w-5 h-5 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </div>
+              <div>
+                <h3 className="text-sm font-medium text-amber-50">Tugas AI Belum Selesai</h3>
+                <p className="text-xs text-amber-200 mt-1">
+                  {pendingAgentTask.userPrompt}
+                </p>
+                <p className="text-xs text-amber-300 mt-1">
+                  Terjedi pada: {pendingAgentTask.currentStep || 'tidak diketahui'}
+                </p>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={handleResumeAgentTask}
+                className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-amber-50 bg-amber-500/20 rounded hover:bg-amber-500/30 transition-colors"
+              >
+                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                Lanjutkan Tugas
+              </button>
+              <button
+                onClick={handleCancelAgentTask}
+                className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-zinc-400 bg-zinc-800/50 rounded hover:bg-zinc-800 transition-colors"
+              >
+                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+                Abaikan
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {/* 1. Icon-Only Clean Header */}
       <Header
         onOpenRender={openRender}
