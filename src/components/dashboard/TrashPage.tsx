@@ -9,6 +9,7 @@ import {
   CheckSquare,
   Square,
   X,
+  Copy,
 } from 'lucide-react';
 import { projectService, Project } from '../../services/ProjectService';
 import { Toast } from '../ui/Toast';
@@ -25,6 +26,7 @@ const MENU_HEIGHT = 116;
 const MENU_GAP = 6;
 const VIEWPORT_MARGIN = 8;
 const LONG_PRESS_DELAY = 450;
+const ACCENT = '#e5173f';
 
 interface TrashPageProps {
   onBack: () => void;
@@ -111,7 +113,6 @@ const DropdownMenu: React.FC<DropdownMenuProps> = ({
 
   if (!isOpen) return null;
 
-  // Hitung posisi dari rect trigger yang sudah disimpan saat klik.
   let top = 0;
   let left = 0;
   if (triggerRect) {
@@ -147,29 +148,29 @@ const DropdownMenu: React.FC<DropdownMenuProps> = ({
       <div
         className="rounded-xl overflow-hidden"
         style={{
-          background: '#18181c',
-          boxShadow: '0 16px 40px -8px rgba(0,0,0,0.85), 0 0 0 1px rgba(255,255,255,0.06)',
+          background: '#0a0a0a',
+          boxShadow: '0 16px 40px -8px rgba(0,0,0,0.9)',
         }}
       >
         <button
           type="button"
           onClick={() => { onRestore(); onClose(); }}
-          className="w-full px-4 py-3 flex items-center gap-3 text-left text-[14px] font-medium transition-colors hover:bg-white/5"
-          style={{ color: '#ffffff' }}
+          className="w-full px-4 py-3 flex items-center gap-3 text-left text-[14px] font-medium transition-colors"
+          style={{ color: '#ffffff', background: 'transparent' }}
           role="menuitem"
         >
-          <RotateCcw className="w-4.5 h-4.5 flex-shrink-0" style={{ width: 18, height: 18, color: '#3fbf7f' }} />
+          <RotateCcw className="w-4.5 h-4.5 flex-shrink-0" style={{ width: 18, height: 18, color: ACCENT }} />
           <span>Pulihkan</span>
         </button>
         <div className="h-px mx-3" style={{ backgroundColor: 'rgba(255,255,255,0.07)' }} />
         <button
           type="button"
           onClick={() => { onPermanentDelete(); onClose(); }}
-          className="w-full px-4 py-3 flex items-center gap-3 text-left text-[14px] font-medium transition-colors hover:bg-white/5"
-          style={{ color: '#e5173f' }}
+          className="w-full px-4 py-3 flex items-center gap-3 text-left text-[14px] font-medium transition-colors"
+          style={{ color: ACCENT, background: 'transparent' }}
           role="menuitem"
         >
-          <Trash2 className="flex-shrink-0" style={{ width: 18, height: 18, color: '#e5173f' }} />
+          <Trash2 className="flex-shrink-0" style={{ width: 18, height: 18, color: ACCENT }} />
           <span>Hapus permanen</span>
         </button>
       </div>
@@ -210,7 +211,6 @@ const TrashPage: React.FC<TrashPageProps> = ({
     } finally {
       setIsLoading(false);
     }
-    // Clear selection when list reloads
     setSelectedIds(new Set());
     setIsSelectMode(false);
   }, []);
@@ -226,6 +226,14 @@ const TrashPage: React.FC<TrashPageProps> = ({
       return next;
     });
   }, []);
+
+  const toggleSelectAll = useCallback(() => {
+    if (selectedIds.size === projects.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(projects.map((p) => p.id)));
+    }
+  }, [projects, selectedIds.size]);
 
   const clearSelection = useCallback(() => {
     setSelectedIds(new Set());
@@ -265,13 +273,11 @@ const TrashPage: React.FC<TrashPageProps> = ({
 
   // Long press handlers
   const startLongPress = useCallback((projectId: string) => {
-    if (isSelectMode) return; // Already in select mode, normal click toggles
+    if (isSelectMode) return;
     longPressProjectRef.current = projectId;
     longPressTimerRef.current = setTimeout(() => {
-      // Enter select mode and select this project
       setIsSelectMode(true);
       setSelectedIds(new Set([projectId]));
-      // Haptic feedback if available
       if ('vibrate' in navigator) {
         navigator.vibrate(10);
       }
@@ -287,49 +293,32 @@ const TrashPage: React.FC<TrashPageProps> = ({
   }, []);
 
   const handleItemMouseDown = useCallback((e: React.MouseEvent, projectId: string) => {
-    // Only start long press on primary button (left click / touch)
-    if (e.button === 0) {
-      startLongPress(projectId);
-    }
+    if (e.button === 0) startLongPress(projectId);
   }, [startLongPress]);
 
-  const handleItemMouseUp = useCallback(() => {
-    cancelLongPress();
-  }, [cancelLongPress]);
-
-  const handleItemMouseLeave = useCallback(() => {
-    cancelLongPress();
-  }, [cancelLongPress]);
+  const handleItemMouseUp = useCallback(() => cancelLongPress(), [cancelLongPress]);
+  const handleItemMouseLeave = useCallback(() => cancelLongPress(), [cancelLongPress]);
 
   const handleItemTouchStart = useCallback((e: React.TouchEvent, projectId: string) => {
     startLongPress(projectId);
   }, [startLongPress]);
 
-  const handleItemTouchEnd = useCallback(() => {
-    cancelLongPress();
-  }, [cancelLongPress]);
-
-  const handleItemTouchCancel = useCallback(() => {
-    cancelLongPress();
-  }, [cancelLongPress]);
+  const handleItemTouchEnd = useCallback(() => cancelLongPress(), [cancelLongPress]);
+  const handleItemTouchCancel = useCallback(() => cancelLongPress(), [cancelLongPress]);
 
   const handleItemClick = useCallback((projectId: string) => {
     if (isSelectMode) {
-      // In select mode, click toggles selection
       toggleSelectProject(projectId);
-      // Exit select mode if no items selected
       if (selectedIds.size === 1 && selectedIds.has(projectId)) {
         clearSelection();
       }
     }
-    // If not in select mode and not long press, do nothing (or could navigate)
   }, [isSelectMode, selectedIds, toggleSelectProject, clearSelection]);
 
   useEffect(() => {
     loadProjects();
   }, [loadProjects]);
 
-  // Run cleanup check when trash page opens
   useEffect(() => {
     try {
       fetch('/api/projects/cleanup', { method: 'POST' }).catch(() => {});
@@ -386,9 +375,23 @@ const TrashPage: React.FC<TrashPageProps> = ({
     return `hsl(${hue}, 65%, 25%)`;
   }
 
+  const itemStyle: React.CSSProperties = {
+    backgroundColor: '#0a0a0a',
+    borderRadius: '12px',
+    padding: '12px',
+    border: 'none',
+    userSelect: 'none',
+    WebkitUserSelect: 'none',
+  };
+
+  const selectedItemStyle: React.CSSProperties = {
+    ...itemStyle,
+    backgroundColor: 'rgba(229,23,63,0.08)',
+  };
+
   return (
     <>
-      <div className="relative z-10 min-h-screen w-full max-w-[480px] mx-auto px-6 pt-6 pb-10 overflow-y-auto">
+      <div className="relative z-10 min-h-screen w-full max-w-[480px] mx-auto px-6 pt-6 pb-10 overflow-y-auto" style={{ backgroundColor: '#000000' }}>
         {/* Header */}
         <header className="flex items-center justify-between mb-6">
           <button
@@ -402,7 +405,7 @@ const TrashPage: React.FC<TrashPageProps> = ({
             <h1 className="text-[18px] font-semibold text-white">Tong Sampah</h1>
             {projects.length > 0 && (
               <span className="px-2 py-0.5 rounded-full text-[11px] font-medium text-white"
-                style={{ backgroundColor: 'rgba(229,23,63,0.18)' }}>
+                style={{ backgroundColor: `rgba(229,23,63,0.15)` }}>
                 {projects.length}
               </span>
             )}
@@ -417,35 +420,34 @@ const TrashPage: React.FC<TrashPageProps> = ({
               <Trash2 className="w-5 h-5" />
             </button>
           ) : projects.length > 0 && isSelectMode ? (
-            <button
-              type="button"
-              onClick={clearSelection}
-              className="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-white/5 transition-colors"
-              aria-label="Batal pilih"
-            >
-              <X className="w-5 h-5" />
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={toggleSelectAll}
+                className="px-3 py-1.5 rounded-lg text-[12px] font-medium text-white transition-colors"
+                style={{ backgroundColor: ACCENT }}
+              >
+                <Copy className="w-4 h-4 mr-1" />
+                {selectedIds.size === projects.length ? 'Batal' : 'Pilih semua'}
+              </button>
+              <button
+                type="button"
+                onClick={clearSelection}
+                className="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-white/5 transition-colors"
+                aria-label="Batal pilih"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
           ) : (
             <div className="w-9 h-9" />
           )}
         </header>
 
-        {/* Selection Count Badge (when in select mode) */}
-        {isSelectMode && (
-          <div className="mb-4 px-1 text-right">
-            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[12px] font-medium text-white"
-              style={{ backgroundColor: 'rgba(229,23,63,0.15)', border: '1px solid rgba(229,23,63,0.3)' }}>
-              <Square className="w-3.5 h-3.5" style={{ color: '#e5173f' }} />
-              <span>{selectedIds.size} dipilih</span>
-            </span>
-          </div>
-        )}
-
-        {/* Bulk Action Bar */}
+        {/* Selection Count + Bulk Actions */}
         {isSelectMode && selectedIds.size > 0 && (
-          <div className="mb-4 p-3 rounded-xl flex items-center justify-between gap-3"
-            style={{ backgroundColor: 'rgba(229,23,63,0.12)', border: '1px solid rgba(229,23,63,0.3)' }}>
-            <span className="text-[13px] font-medium text-white">
+          <div className="mb-4 p-3 rounded-xl flex items-center justify-between gap-3" style={{ backgroundColor: '#0a0a0a' }}>
+            <span className="text-[13px] font-medium text-white" style={{ color: ACCENT }}>
               {selectedIds.size} dipilih
             </span>
             <div className="flex items-center gap-2">
@@ -461,7 +463,7 @@ const TrashPage: React.FC<TrashPageProps> = ({
                 type="button"
                 onClick={handleBulkPermanentDelete}
                 className="px-3 py-1.5 rounded-lg text-[12px] font-medium text-white transition-colors"
-                style={{ backgroundColor: '#e5173f' }}
+                style={{ backgroundColor: ACCENT }}
               >
                 Hapus permanen
               </button>
@@ -471,14 +473,14 @@ const TrashPage: React.FC<TrashPageProps> = ({
 
         {isLoading ? (
           <div className="flex items-center justify-center py-12">
-            <Loader2 className="w-8 h-8 animate-spin" style={{ color: '#e5173f' }} />
+            <Loader2 className="w-8 h-8 animate-spin" style={{ color: ACCENT }} />
           </div>
         ) : projects.length === 0 ? (
           <div className="py-12 text-center">
             <p className="text-zinc-400 text-[15px]">Tong sampah kosong</p>
           </div>
         ) : (
-          <div className="space-y-3">
+          <div className="space-y-2">
             {projects.map((project) => {
               const isMenuOpen = dropdownProject?.id === project.id;
               const isSelected = selectedIds.has(project.id);
@@ -486,24 +488,14 @@ const TrashPage: React.FC<TrashPageProps> = ({
                 <div
                   key={project.id}
                   className="flex items-center gap-3"
-                  style={{
-                    backgroundColor: isSelected ? 'rgba(229,23,63,0.1)' : 'rgba(255,255,255,0.04)',
-                    borderRadius: '12px',
-                    padding: '12px',
-                    border: isSelected ? '1px solid rgba(229,23,63,0.3)' : 'none',
-                    userSelect: 'none',
-                    WebkitUserSelect: 'none',
-                  }}
-                  // Mouse events for long press
+                  style={isSelected ? selectedItemStyle : itemStyle}
                   onMouseDown={(e) => handleItemMouseDown(e, project.id)}
                   onMouseUp={handleItemMouseUp}
                   onMouseLeave={handleItemMouseLeave}
                   onMouseOut={handleItemMouseLeave}
-                  // Touch events for long press
                   onTouchStart={(e) => handleItemTouchStart(e, project.id)}
                   onTouchEnd={handleItemTouchEnd}
                   onTouchCancel={handleItemTouchCancel}
-                  // Click handler
                   onClick={() => handleItemClick(project.id)}
                 >
                   {/* Select Checkbox */}
@@ -515,7 +507,7 @@ const TrashPage: React.FC<TrashPageProps> = ({
                         toggleSelectProject(project.id);
                       }}
                       className="flex-shrink-0 flex items-center justify-center p-1"
-                      style={{ color: isSelected ? '#e5173f' : '#71717a' }}
+                      style={{ color: isSelected ? ACCENT : '#71717a', background: 'transparent' }}
                       aria-label={isSelected ? 'Batal pilih' : 'Pilih'}
                       aria-pressed={isSelected}
                     >
@@ -540,7 +532,6 @@ const TrashPage: React.FC<TrashPageProps> = ({
                         <Loader2 className="w-8 h-8 text-white/80" fill="currentColor" strokeWidth={0} />
                       </div>
                     )}
-                    {/* Aspect Ratio Badge */}
                     <div className="absolute bottom-1 left-1 px-1.5 py-0.5 rounded text-[9px] font-medium text-white"
                       style={{ backgroundColor: 'rgba(11,11,13,0.8)' }}>
                       {project.aspectRatio}
@@ -573,7 +564,7 @@ const TrashPage: React.FC<TrashPageProps> = ({
                         minWidth: '40px',
                         minHeight: '40px',
                         color: isMenuOpen ? '#ffffff' : '#a1a1aa',
-                        backgroundColor: isMenuOpen ? 'rgba(255,255,255,0.08)' : 'transparent',
+                        backgroundColor: isMenuOpen ? 'rgba(255,255,255,0.05)' : 'transparent',
                       }}
                       aria-label={`Menu aksi untuk ${project.name}`}
                       aria-expanded={isMenuOpen}
