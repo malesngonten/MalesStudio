@@ -45,8 +45,8 @@ export const StreamingIndicator: React.FC<StreamingIndicatorProps> = ({
     }
   };
 
-  // Truncate note for mobile
-  const displayNote = note && note.length > 50 ? note.slice(0, 47) + '...' : note;
+  // Tampilkan note sepenuhnya (tanpa potong) agar currentStep AI terlihat utuh
+  const displayNote = note || '';
 
   return (
     <div className="sk-wrap" role="status" aria-live="polite">
@@ -63,7 +63,7 @@ export const StreamingIndicator: React.FC<StreamingIndicatorProps> = ({
           )}
         </span>
         {displayNote && (
-          <span className="text-[11px] text-zinc-500 truncate max-w-[200px] sm:max-w-none ml-1">
+          <span className="text-[11px] text-zinc-500 ml-1 break-words">
             {displayNote}
           </span>
         )}
