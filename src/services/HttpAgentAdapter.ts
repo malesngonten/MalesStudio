@@ -20,13 +20,28 @@ export class HttpAgentAdapter implements IAgentClient {
   private status: AgentStatus = 'idle';
   private eventSource: EventSource | null = null;
   private backendAvailable = true;
-  private currentSessionId = 'session-main';
+  private currentSessionId = '';
+  private currentProjectId: string | null = null;
+  private activeSessionIdFromServer: string | null = null;
   private onToolUpdateCallback?: (msgId: string, tool: AgentToolCall) => void;
   private onFileChangedCallback?: (file: string, data: any) => void;
   private onAgentStatusCallback?: (status: AgentStatus, extra?: { round?: number; maxRounds?: number; note?: string }) => void;
   private lastError: string | null = null;
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
+
+  // Multi-listener registries. sendMessage adds its own temporary listener on
+  // top of these, so live streaming keeps working when the component only
+  // registers a persistent listener (e.g. after reopening a project mid-run).
+  private textChunkListeners = new Set<
+    (messageId: string, chunk: string, accumulated?: string) => void
+  >();
+  private toolUpdateListeners = new Set<
+    (messageId: string, toolCall: AgentToolCall) => void
+  >();
+  private messageCompleteListeners = new Set<
+    (message: AgentMessage, sessionId?: string) => void
+  >();
 
   /** Normalize a raw backend session into the UI contract (keeps history flags). */
   private toAgentSession(raw: any): AgentSession {
@@ -92,11 +107,55 @@ export class HttpAgentAdapter implements IAgentClient {
     return this.lastError;
   }
 
+  /** Bind this client to a project; all chat requests are scoped to it. */
+  setProjectId(projectId: string | null) {
+    if (this.currentProjectId === projectId) return;
+    this.currentProjectId = projectId;
+    // Session ids are only meaningful inside their project.
+    this.currentSessionId = '';
+    this.activeSessionIdFromServer = null;
+  }
+
+  getProjectId(): string | null {
+    return this.currentProjectId;
+  }
+
+  /** Session the backend is currently processing (null when idle). */
+  getActiveSessionId(): string | null {
+    return this.activeSessionIdFromServer;
+  }
+
+  /** Current session bound to this adapter. */
+  getCurrentSessionId(): string | null {
+    return this.currentSessionId || null;
+  }
+
+  onTextChunk(cb: (messageId: string, chunk: string, accumulated?: string) => void): () => void {
+    this.textChunkListeners.add(cb);
+    return () => this.textChunkListeners.delete(cb);
+  }
+
+  onToolUpdate(cb: (messageId: string, toolCall: AgentToolCall) => void): () => void {
+    this.toolUpdateListeners.add(cb);
+    return () => this.toolUpdateListeners.delete(cb);
+  }
+
+  onMessageComplete(cb: (message: AgentMessage, sessionId?: string) => void): () => void {
+    this.messageCompleteListeners.add(cb);
+    return () => this.messageCompleteListeners.delete(cb);
+  }
+
   /** Check if backend is reachable via a real API call */
   async checkConnection(): Promise<boolean> {
     try {
       const res = await fetch('/api/agent/status', { method: 'GET', cache: 'no-cache' });
       if (res.ok) {
+        try {
+          const data = await res.json();
+          this.status = data.status || 'idle';
+          this.activeSessionIdFromServer =
+            data.activeSessionId || (data.status === 'idle' ? null : this.activeSessionIdFromServer);
+        } catch {}
         this.backendAvailable = true;
         this.lastError = null;
         return true;
@@ -148,6 +207,12 @@ export class HttpAgentAdapter implements IAgentClient {
         try {
           const data = JSON.parse(e.data);
           this.status = data.status;
+          if (data.activeSessionId !== undefined) {
+            this.activeSessionIdFromServer = data.activeSessionId || null;
+          }
+          if (data.status === 'idle') {
+            this.activeSessionIdFromServer = null;
+          }
           // Forward to callback with extra info (round, maxRounds, note)
           if (this.onAgentStatusCallback) {
             this.onAgentStatusCallback(data.status, {
@@ -174,8 +239,15 @@ export class HttpAgentAdapter implements IAgentClient {
       this.eventSource.addEventListener('tool_update', (e: MessageEvent) => {
         try {
           const data = JSON.parse(e.data);
-          if (this.onToolUpdateCallback && data.toolCall) {
-            this.onToolUpdateCallback(data.messageId, data.toolCall);
+          if (data.toolCall) {
+            if (this.onToolUpdateCallback) {
+              this.onToolUpdateCallback(data.messageId, data.toolCall);
+            }
+            this.toolUpdateListeners.forEach((cb) => {
+              try {
+                cb(data.messageId, data.toolCall);
+              } catch {}
+            });
           }
         } catch {}
       });
@@ -183,9 +255,42 @@ export class HttpAgentAdapter implements IAgentClient {
       this.eventSource.addEventListener('text_chunk', (e: MessageEvent) => {
         try {
           const data = JSON.parse(e.data);
-          if (this.onTextChunkCallback && data.chunk) {
-            this.onTextChunkCallback(data.messageId, data.chunk);
+          if (data.chunk) {
+            if (this.onTextChunkCallback) {
+              this.onTextChunkCallback(data.messageId, data.chunk);
+            }
+            this.textChunkListeners.forEach((cb) => {
+              try {
+                cb(data.messageId, data.chunk, data.accumulated);
+              } catch {}
+            });
           }
+        } catch {}
+      });
+
+      this.eventSource.addEventListener('message_complete', (e: MessageEvent) => {
+        try {
+          const data = JSON.parse(e.data);
+          if (!data?.message) return;
+          const msg = data.message;
+          const sessionId = data.sessionId || undefined;
+          const finalMsg: AgentMessage = {
+            id: msg.id,
+            role: 'assistant',
+            content: msg.content || msg.text || '',
+            text: msg.text || msg.content || '',
+            timestamp: msg.timestamp || '',
+            toolCalls: msg.toolCalls,
+            checkpointHash: msg.checkpointHash,
+            canRevert: msg.canRevert,
+            status: msg.status,
+            tokenUsage: msg.tokenUsage,
+          };
+          this.messageCompleteListeners.forEach((cb) => {
+            try {
+              cb(finalMsg, sessionId);
+            } catch {}
+          });
         } catch {}
       });
 
@@ -270,6 +375,7 @@ export class HttpAgentAdapter implements IAgentClient {
       if (res.ok) {
         const data = await res.json();
         this.status = data.status || 'idle';
+        this.activeSessionIdFromServer = data.status === 'idle' ? null : data.activeSessionId || null;
         this.backendAvailable = true;
         return true;
       }
@@ -296,18 +402,80 @@ export class HttpAgentAdapter implements IAgentClient {
         apiKey: string;
         modelId: string;
       };
+      projectId?: string | null;
+      sessionId?: string | null;
+      agentContext?: string;
+      clientUserMessageId?: string;
       clientMessageId?: string;
     },
     onUpdate?: (partialMessage: AgentMessage, toolCall?: AgentToolCall) => void
   ): Promise<AgentMessage> {
     this.status = 'thinking';
     let streamingAccumulated = '';
-    let currentMsgId = '';
 
     // Client-generated message ID so frontend placeholder and backend SSE
     // streaming events share the same ID — enables real-time token updates.
-    const clientMessageId = context?.clientMessageId || `msg-ai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    currentMsgId = clientMessageId;
+    const clientMessageId =
+      context?.clientMessageId ||
+      `msg-ai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const currentMsgId = clientMessageId;
+
+    // Session & project are explicit parts of the request. Never rely on a
+    // global/stale session id when the caller knows the exact target.
+    const targetSessionId = context?.sessionId || this.currentSessionId || undefined;
+    if (targetSessionId) this.currentSessionId = targetSessionId;
+    const targetProjectId =
+      typeof context?.projectId === 'string' && context.projectId
+        ? context.projectId
+        : this.currentProjectId;
+
+    // Variabel settle untuk promise yang di-resolve oleh SSE completion / duplicate response / timeout
+    let settleResolve: ((value: AgentMessage) => void) | null = null;
+    let settleReject: ((reason?: any) => void) | null = null;
+    let settled = false;
+    let unsubscribers: Array<() => void> = [];
+
+    const cleanup = () => {
+      if (this.eventSource) {
+        this.eventSource.removeEventListener('agent_cancelled', handleCancelled);
+      }
+      unsubscribers.forEach((fn) => {
+        try {
+          fn();
+        } catch {}
+      });
+      unsubscribers = [];
+    };
+
+    const handleCompleteMessage = (msg: AgentMessage, sessionId?: string) => {
+      if (settled) return;
+      // Only settle for the message this request created.
+      if (msg.id && msg.id !== currentMsgId) return;
+      // Ignore completions from another session (one agent runs at a time).
+      if (sessionId && this.currentSessionId && sessionId !== this.currentSessionId) return;
+      settled = true;
+      cleanup();
+      const status = msg.status || 'completed';
+      if (status === 'failed' || status === 'error') {
+        this.status = 'idle';
+        settleReject?.(new Error(msg.content || msg.text || 'AI provider error'));
+        return;
+      }
+      this.status = 'idle';
+      settleResolve?.({
+        ...msg,
+        content: msg.content || msg.text || streamingAccumulated,
+        text: msg.text || msg.content || streamingAccumulated,
+      });
+    };
+
+    const handleCancelled = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      this.status = 'idle';
+      settleReject?.(new Error('Dibatalkan oleh pengguna'));
+    };
 
     try {
       // Verify backend is reachable before attempting to send
@@ -328,60 +496,6 @@ export class HttpAgentAdapter implements IAgentClient {
         throw noSSEErr;
       }
 
-      // Variabel settle untuk promise yang di-resolve oleh SSE completion atau timeout
-      let settleResolve: ((value: AgentMessage) => void) | null = null;
-      let settleReject: ((reason?: any) => void) | null = null;
-      let settled = false;
-
-      const cleanup = () => {
-        if (this.eventSource) {
-          this.eventSource.removeEventListener('message_complete', handleComplete);
-          this.eventSource.removeEventListener('agent_cancelled', handleCancelled);
-        }
-      };
-
-      const handleComplete = (e: MessageEvent) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        try {
-          const data = JSON.parse(e.data);
-          const msg = data.message || data;
-          const status = msg.status || 'completed';
-
-          if (status === 'failed' || status === 'error') {
-            this.status = 'idle';
-            settleReject?.(new Error(msg.content || msg.text || 'AI provider error'));
-            return;
-          }
-
-          this.status = 'idle';
-          settleResolve?.({
-            id: msg.id,
-            role: 'assistant',
-            content: msg.content || msg.text || streamingAccumulated,
-            text: msg.text || msg.content || streamingAccumulated,
-            timestamp: msg.timestamp || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            toolCalls: msg.toolCalls,
-            checkpointHash: msg.checkpointHash,
-            canRevert: msg.canRevert,
-            status: msg.status,
-          });
-        } catch (err) {
-          this.status = 'idle';
-          settleReject?.(err);
-        }
-      };
-
-      const handleCancelled = (e: MessageEvent) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        this.status = 'idle';
-        settleReject?.(new Error('Dibatalkan oleh pengguna'));
-      };
-
-      this.eventSource.addEventListener('message_complete', handleComplete);
       this.eventSource.addEventListener('agent_cancelled', handleCancelled);
 
       const pendingPromise = new Promise<AgentMessage>((resolve, reject) => {
@@ -389,34 +503,40 @@ export class HttpAgentAdapter implements IAgentClient {
         settleReject = reject;
       });
 
-      this.onTextChunkCallback = (msgId, chunk) => {
-        currentMsgId = msgId;
-        streamingAccumulated += chunk;
-        if (onUpdate) {
-          onUpdate({
-            id: msgId,
-            role: 'assistant',
-            content: streamingAccumulated,
-            text: streamingAccumulated,
-            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          });
-        }
-      };
-
-      this.onToolUpdateCallback = (msgId, toolCall) => {
-        if (onUpdate) {
-          onUpdate(
-            {
+      // Persistent-listener style so the same events keep updating the UI
+      // even if this request was started before a project reopen.
+      unsubscribers.push(
+        this.onMessageComplete(handleCompleteMessage),
+        this.onTextChunk((msgId, chunk, accumulated) => {
+          if (msgId !== currentMsgId) return;
+          streamingAccumulated =
+            typeof accumulated === 'string' ? accumulated : streamingAccumulated + chunk;
+          if (onUpdate) {
+            onUpdate({
               id: msgId,
               role: 'assistant',
               content: streamingAccumulated,
               text: streamingAccumulated,
               timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            },
-            toolCall
-          );
-        }
-      };
+            });
+          }
+        }),
+        this.onToolUpdate((msgId, toolCall) => {
+          if (msgId !== currentMsgId) return;
+          if (onUpdate) {
+            onUpdate(
+              {
+                id: msgId,
+                role: 'assistant',
+                content: streamingAccumulated,
+                text: streamingAccumulated,
+                timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              },
+              toolCall
+            );
+          }
+        })
+      );
 
       // Timeout promise — mencegah pendingPromise menunggu selamanya jika backend
       // tidak pernah mengirim message_complete (provider AI hang / SSE terputus)
@@ -430,7 +550,7 @@ export class HttpAgentAdapter implements IAgentClient {
         pendingPromise.then(() => clearTimeout(timer)).catch(() => clearTimeout(timer));
       });
 
-      // Post prompt to backend with byok config
+      // Post prompt to backend with byok config + explicit project/session ids.
       const res = await fetch('/api/agent/prompt', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -439,13 +559,16 @@ export class HttpAgentAdapter implements IAgentClient {
           attachments,
           byok: context?.byok,
           clientMessageId,
+          clientUserMessageId: context?.clientUserMessageId,
+          agentContext: context?.agentContext,
           context: {
             playheadFrame: context?.currentFrame,
             playheadSec: context ? parseFloat((context.currentFrame / context.timeline.fps).toFixed(2)) : 0,
             selectedClipId: context?.selectedClip?.id,
             selectedClip: context?.selectedClip || null,
           },
-          sessionId: this.currentSessionId,
+          sessionId: targetSessionId,
+          projectId: targetProjectId || undefined,
         }),
       });
 
@@ -463,10 +586,42 @@ export class HttpAgentAdapter implements IAgentClient {
         throw httpErr;
       }
 
+      // Duplicate/idempotent responses: the backend may return the already
+      // completed assistant message directly instead of emitting SSE again.
+      let accepted: any = null;
+      try {
+        accepted = await res.json();
+      } catch {}
+      if (accepted?.sessionId) {
+        this.currentSessionId = accepted.sessionId;
+      }
+      if (!settled && accepted?.duplicate && accepted.message) {
+        settled = true;
+        cleanup();
+        this.status = 'idle';
+        const msg = accepted.message;
+        const status = msg.status || 'completed';
+        if (status === 'failed' || status === 'error') {
+          throw new Error(msg.content || msg.text || 'AI provider error');
+        }
+        return {
+          id: msg.id,
+          role: 'assistant',
+          content: msg.content || msg.text || '',
+          text: msg.text || msg.content || '',
+          timestamp: msg.timestamp || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          toolCalls: msg.toolCalls,
+          checkpointHash: msg.checkpointHash,
+          canRevert: msg.canRevert,
+          status,
+        };
+      }
+
       // Race antara completion dari SSE dan timeout — status akhir diikuti hasil provider,
       // bukan hanya karena HTTP request awal sudah terkirim atau streaming sudah dimulai.
       return await Promise.race([pendingPromise, timeoutPromise]);
     } catch (err: any) {
+      cleanup();
       this.status = 'idle';
       this.lastError = err?.message || 'Server tidak dapat dihubungi';
 
@@ -513,7 +668,10 @@ export class HttpAgentAdapter implements IAgentClient {
       return mockInstance.getSessions();
     }
     try {
-      const data = await this.requestJson('/api/chats');
+      const params = new URLSearchParams();
+      if (this.currentProjectId) params.set('projectId', this.currentProjectId);
+      const suffix = params.toString() ? `?${params.toString()}` : '';
+      const data = await this.requestJson(`/api/chats${suffix}`);
       return (data.sessions || []).map((s: any) => this.toAgentSession(s));
     } catch {
       return mockInstance.getSessions();
@@ -521,7 +679,9 @@ export class HttpAgentAdapter implements IAgentClient {
   }
 
   async switchSession(sessionId: string): Promise<AgentMessage[]> {
-    const page = await this.loadSessionMessages(sessionId);
+    const page = await this.loadSessionMessages(sessionId, {
+      projectId: this.currentProjectId,
+    });
     return page.messages;
   }
 
@@ -532,7 +692,7 @@ export class HttpAgentAdapter implements IAgentClient {
    */
   async loadSessionMessages(
     sessionId: string,
-    options?: { beforeIndex?: number; limit?: number }
+    options?: { beforeIndex?: number; limit?: number; projectId?: string | null }
   ): Promise<AgentMessagePage> {
     this.currentSessionId = sessionId;
     if (!this.backendAvailable) {
@@ -544,6 +704,11 @@ export class HttpAgentAdapter implements IAgentClient {
       if (typeof options?.beforeIndex === 'number' && Number.isFinite(options.beforeIndex)) {
         params.set('before', String(options.beforeIndex));
       }
+      const projectId =
+        typeof options?.projectId === 'string' && options.projectId
+          ? options.projectId
+          : this.currentProjectId;
+      if (projectId) params.set('projectId', projectId);
       const data = await this.requestJson(
         `/api/chats/${encodeURIComponent(sessionId)}/messages?${params.toString()}`
       );
@@ -558,14 +723,26 @@ export class HttpAgentAdapter implements IAgentClient {
     }
   }
 
-  async createSession(title?: string): Promise<AgentSession> {
+  async createSession(
+    title?: string,
+    options?: { sessionId?: string; silent?: boolean; projectId?: string | null }
+  ): Promise<AgentSession> {
     if (!this.backendAvailable) {
       return mockInstance.createSession(title);
     }
+    const projectId =
+      typeof options?.projectId === 'string' && options.projectId
+        ? options.projectId
+        : this.currentProjectId;
     const data = await this.requestJson('/api/chats', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: title || 'Sesi Video Baru' }),
+      body: JSON.stringify({
+        title: title || 'Sesi Video Baru',
+        sessionId: options?.sessionId,
+        silent: Boolean(options?.silent),
+        projectId: projectId || undefined,
+      }),
     });
     this.currentSessionId = data.session.id;
     return this.toAgentSession(data.session);

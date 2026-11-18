@@ -883,13 +883,14 @@ let chatSessions: {
   tags?: string[];
 }[] = [];
 
-function loadChatSessionsFromDisk() {
+function readChatSessionsFromDir(dir: string): any[] {
   try {
-    const chatFiles = fs.readdirSync(CHATS_DIR).filter((f) => f.endsWith('.json'));
-    const sessions = chatFiles
+    if (!fs.existsSync(dir)) return [];
+    const chatFiles = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
+    return chatFiles
       .map((file) => {
         try {
-          const data = JSON.parse(fs.readFileSync(path.join(CHATS_DIR, file), 'utf-8'));
+          const data = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf-8'));
           // Ensure new fields exist for backward compatibility
           return {
             ...data,
@@ -908,21 +909,18 @@ function loadChatSessionsFromDisk() {
       })
       .filter(Boolean)
       .sort((a, b) => {
-        const aTime = new Date(a.updatedAt || a.createdAt || 0).getTime();
-        const bTime = new Date(b.updatedAt || b.createdAt || 0).getTime();
+        const aTime = new Date(a.updatedAt || a.createdAt || 0).getTime() || 0;
+        const bTime = new Date(b.updatedAt || b.createdAt || 0).getTime() || 0;
         return bTime - aTime;
       });
-
-    if (sessions.length > 0) {
-      chatSessions = sessions;
-    } else {
-      // Tidak ada sesi tersimpan — biarkan kosong. Session dibuat saat user kirim prompt pertama.
-      chatSessions = [];
-    }
   } catch {
-    // Error baca disk — biarkan kosong, jangan buat default session
-    chatSessions = [];
+    return [];
   }
+}
+
+function loadChatSessionsFromDisk() {
+  // Tidak ada sesi tersimpan — biarkan kosong. Session dibuat saat user kirim prompt pertama.
+  chatSessions = readChatSessionsFromDir(CHATS_DIR);
 }
 
 loadChatSessionsFromDisk();
@@ -943,8 +941,20 @@ function persistSession(session: any) {
       ? String(lastMsg.content || lastMsg.text || '').slice(0, 100)
       : '';
   }
+  // ISO timestamp agar sorting berbasis Date selalu valid (data lama tetap kompatibel).
+  session.updatedAt = new Date().toISOString();
   const chatFile = path.join(CHATS_DIR, `${session.id}.json`);
   fs.writeFileSync(chatFile, JSON.stringify(session, null, 2), 'utf-8');
+}
+
+/** Activate a project on the server only when it is not already active. */
+function ensureActiveProject(projectId: string): boolean {
+  if (!isValidProjectId(projectId)) return false;
+  if (!fs.existsSync(projectDirFor(projectId))) return false;
+  if (path.basename(ACTIVE_PROJECT_DIR) !== projectId) {
+    return setActiveProjectDir(projectId);
+  }
+  return true;
 }
 
 /**
@@ -1006,7 +1016,10 @@ function broadcastSSE(event: string, data: any) {
 // Helper to set agent status and manage heartbeat
 function setAgentStatus(newStatus: typeof agentStatus) {
   agentStatus = newStatus;
-  broadcastSSE('agent_status', { status: agentStatus });
+  broadcastSSE('agent_status', {
+    status: agentStatus,
+    activeSessionId: agentStatus === 'idle' ? null : activeSessionId,
+  });
   if (agentStatus !== 'idle') {
     startHeartbeat();
   } else {
@@ -3156,25 +3169,31 @@ async function callAIWithTimeout(
 
 // 6. POST /api/agent/prompt
 app.post('/api/agent/prompt', async (req, res) => {
-  const { text, context, attachments, sessionId, byok, clientMessageId } = req.body;
-  let currentSession = chatSessions.find((s) => s.id === (sessionId || activeSessionId));
-  // Fallback: if no matching session, create a default one so messages aren't lost
-  if (!currentSession) {
-    if (chatSessions.length > 0) {
-      currentSession = chatSessions[0];
-    } else {
-      // No sessions at all - create a default session
-      const defaultId = 'session-main';
-      currentSession = {
-        id: defaultId,
-        title: 'Edit Video Remotion Pertama',
-        createdAt: 'Hari ini',
-        updatedAt: 'Baru saja',
-        messages: [],
-      };
-      chatSessions.unshift(currentSession);
-      activeSessionId = defaultId;
-      persistSession(currentSession);
+  const {
+    text,
+    context,
+    attachments,
+    sessionId,
+    byok,
+    clientMessageId,
+    clientUserMessageId,
+    projectId,
+    agentContext,
+  } = req.body || {};
+
+  // Request ini harus selalu terikat ke project yang diminta. Tanpa ini,
+  // prompt dari project A bisa masuk ke sesi/project B saat aktivasi bergeser.
+  if (typeof projectId === 'string' && projectId) {
+    if (!isValidProjectId(projectId) || !fs.existsSync(projectDirFor(projectId))) {
+      return res.status(404).json({ error: 'Project tidak ditemukan' });
+    }
+    if (path.basename(ACTIVE_PROJECT_DIR) !== projectId) {
+      if (agentStatus !== 'idle') {
+        return res.status(409).json({
+          error: 'Agent sedang memproses project lain. Tunggu sampai selesai sebelum membuka project ini.',
+        });
+      }
+      setActiveProjectDir(projectId);
     }
   }
 
@@ -3182,10 +3201,90 @@ app.post('/api/agent/prompt', async (req, res) => {
     return res.status(400).json({ error: 'Text or attachment is required' });
   }
 
-  // Create user message with guaranteed unique ID
-  const userMsgId = `msg-usr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  // Resolve the exact session requested by the client. A provided-but-missing
+  // session id is created with that exact id (silent, no welcome message) so
+  // the first prompt always becomes the first message in project history.
+  // Hanya gunakan fallback sesi lain jika client tidak menyebut session id.
+  const requestedSessionId =
+    typeof sessionId === 'string' && sessionId.trim() ? sessionId.trim() : '';
+  let currentSession =
+    (requestedSessionId && chatSessions.find((s) => s.id === requestedSessionId)) ||
+    (!requestedSessionId && activeSessionId
+      ? chatSessions.find((s) => s.id === activeSessionId)
+      : undefined) ||
+    (!requestedSessionId ? chatSessions[0] : undefined);
+
+  if (!currentSession) {
+    const newSessionId =
+      requestedSessionId && /^[A-Za-z0-9_-]+$/.test(requestedSessionId)
+        ? requestedSessionId
+        : `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const nowIso = new Date().toISOString();
+    currentSession = {
+      id: newSessionId,
+      title: 'Sesi Video Baru',
+      createdAt: nowIso,
+      updatedAt: nowIso,
+      messages: [],
+      isPinned: false,
+      isArchived: false,
+      isDeleted: false,
+      tags: [],
+    };
+    chatSessions.unshift(currentSession);
+  }
+  activeSessionId = currentSession.id;
+
+  // Idempotency: retried requests with the same client ids must never
+  // duplicate messages or start a second AI run.
+  const existingUser = clientUserMessageId
+    ? currentSession.messages.find(
+        (m: any) => m.role === 'user' && m.clientId === clientUserMessageId
+      )
+    : null;
+  const existingAssistant = clientMessageId
+    ? currentSession.messages.find((m: any) => m.id === clientMessageId)
+    : null;
+
+  if (existingAssistant) {
+    const isTerminal = Boolean(existingAssistant.status && existingAssistant.status !== 'streaming');
+    if (!isTerminal) {
+      return res.json({
+        success: true,
+        duplicate: true,
+        processing: true,
+        sessionId: currentSession.id,
+        messageId: existingAssistant.id,
+      });
+    }
+    return res.json({
+      success: true,
+      duplicate: true,
+      sessionId: currentSession.id,
+      messageId: existingAssistant.id,
+      message: existingAssistant,
+      status: existingAssistant.status,
+    });
+  }
+
+  // Only one agent task at a time — reject instead of corrupting another
+  // session/project that is still being processed.
+  if (agentStatus !== 'idle') {
+    return res.status(409).json({
+      error: 'AI Agent sedang memproses permintaan lain. Tunggu sampai selesai.',
+      sessionId: currentSession.id,
+      active: true,
+    });
+  }
+
+  // Create user message with guaranteed unique ID. The client-provided id is
+  // persisted so retries can be deduplicated.
+  const userMsgId =
+    (typeof clientUserMessageId === 'string' && clientUserMessageId) ||
+    `msg-usr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const userMessage = {
     id: userMsgId,
+    clientId: userMsgId,
     role: 'user',
     content: text || 'Menambahkan lampiran file',
     text: text || 'Menambahkan lampiran file',
@@ -3193,22 +3292,34 @@ app.post('/api/agent/prompt', async (req, res) => {
     context,
     attachments,
   };
-  currentSession.messages.push(userMessage);
+  if (!existingUser) {
+    currentSession.messages.push(userMessage);
+  }
 
   // Set agent working status
   setAgentStatus('thinking');
 
-  // Response message placeholder with guaranteed unique ID
-  const aiMsgId = clientMessageId || `msg-ai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  // Response message placeholder with guaranteed unique ID. status 'streaming'
+  // lets the UI restore the in-progress state if the project is reopened.
+  const aiMsgId =
+    (typeof clientMessageId === 'string' && clientMessageId) ||
+    `msg-ai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const aiMessage: any = {
     id: aiMsgId,
     role: 'assistant',
     content: '',
     text: '',
     timestamp: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
+    status: 'streaming',
     toolCalls: [],
   };
   currentSession.messages.push(aiMessage);
+
+  // Persist the user prompt + placeholder immediately. If the provider hangs or
+  // the browser closes, the conversation is still in the project's history.
+  persistSession(currentSession);
+
+  const extraAgentContext = typeof agentContext === 'string' ? agentContext.trim() : '';
 
   // Deteksi pesan percakapan sederhana (salam / uji coba) — jawab langsung tanpa
   // memicu AI provider, tanpa menjalankan tool, dan tanpa membaca file proyek.
@@ -3226,14 +3337,23 @@ app.post('/api/agent/prompt', async (req, res) => {
     aiMessage.content = greetingReply;
     aiMessage.text = greetingReply;
     aiMessage.status = 'completed';
-    broadcastSSE('message_complete', { messageId: aiMsgId, message: aiMessage });
+    broadcastSSE('message_complete', {
+      messageId: aiMsgId,
+      sessionId: currentSession.id,
+      message: aiMessage,
+    });
 
-    currentSession.updatedAt = new Date().toLocaleString('id-ID');
     persistSession(currentSession);
-    return res.json({ success: true, messageId: aiMsgId });
+    return res.json({
+      success: true,
+      messageId: aiMsgId,
+      sessionId: currentSession.id,
+      message: aiMessage,
+      status: 'completed',
+    });
   }
 
-  res.json({ success: true, messageId: aiMsgId });
+  res.json({ success: true, messageId: aiMsgId, sessionId: currentSession.id });
 
   // Run Agent Processing in background
   (async () => {
@@ -3391,7 +3511,12 @@ app.post('/api/agent/prompt', async (req, res) => {
         }
 
         if (!suppressStream) {
-          broadcastSSE('text_chunk', { messageId: aiMsgId, chunk, accumulated: aiRawResponse });
+          broadcastSSE('text_chunk', {
+            messageId: aiMsgId,
+            sessionId: currentSession.id,
+            chunk,
+            accumulated: aiRawResponse,
+          });
         }
       };
 
@@ -3696,6 +3821,7 @@ ATURAN FOKUS ELEMEN (WAJIB):
     : ''
 }
 
+${extraAgentContext ? `ADDITIONAL INSTRUCTION FOR THIS REQUEST (from the app, not visible as a chat message):\n${extraAgentContext}\n` : ''}
 TASK MODE: ${
         isVideoTask
           ? `VIDEO_IMPLEMENTATION. User meminta video/perubahan video. Riset (web/repository) hanyalah persiapan. Jangan mengakhiri respons dengan analisis, ringkasan repository, atau rencana. WAJIB lanjut ke writeFile/editFile/modifyTimeline sampai timeline.json berisi layer & clip nyata. Timeline kosong = tugas belum selesai.`
@@ -3937,8 +4063,11 @@ User request:
         aiMessage.content = warningMsg;
         aiMessage.text = warningMsg;
         aiMessage.status = 'error';
-        broadcastSSE('message_complete', { messageId: aiMsgId, message: aiMessage });
-        currentSession.updatedAt = new Date().toLocaleString('id-ID');
+        broadcastSSE('message_complete', {
+          messageId: aiMsgId,
+          sessionId: currentSession.id,
+          message: aiMessage,
+        });
         persistSession(currentSession);
         return;
       }
@@ -3948,8 +4077,11 @@ User request:
         aiMessage.content = errorMsg;
         aiMessage.text = errorMsg;
         aiMessage.status = 'error';
-        broadcastSSE('message_complete', { messageId: aiMsgId, message: aiMessage });
-        currentSession.updatedAt = new Date().toLocaleString('id-ID');
+        broadcastSSE('message_complete', {
+          messageId: aiMsgId,
+          sessionId: currentSession.id,
+          message: aiMessage,
+        });
         persistSession(currentSession);
         return;
       }
@@ -4471,8 +4603,11 @@ User request:
         aiMessage.text = aiMessage.content = `⚠️ Analisis lanjutan gagal: ${loopErr?.message || loopErr}. Coba kirim ulang.`;
         aiMessage.status = 'failed';
         multiTurnHandled = true;
-        broadcastSSE('message_complete', { messageId: aiMsgId, message: aiMessage });
-        currentSession.updatedAt = new Date().toLocaleString('id-ID');
+        broadcastSSE('message_complete', {
+          messageId: aiMsgId,
+          sessionId: currentSession.id,
+          message: aiMessage,
+        });
         persistSession(currentSession);
       }
 
@@ -4589,11 +4724,11 @@ User request:
 
       broadcastSSE('message_complete', {
         messageId: aiMsgId,
+        sessionId: currentSession.id,
         message: aiMessage,
       });
 
       // Save transcript to chat session with updated metadata
-      currentSession.updatedAt = new Date().toLocaleString('id-ID');
       persistSession(currentSession);
     } catch (err: any) {
       if (isTimeout) {
@@ -4605,7 +4740,14 @@ User request:
       }
       aiMessage.content = aiMessage.text;
       aiMessage.status = 'failed';
-      broadcastSSE('message_complete', { messageId: aiMsgId, message: aiMessage });
+      broadcastSSE('message_complete', {
+        messageId: aiMsgId,
+        sessionId: currentSession.id,
+        message: aiMessage,
+      });
+      // Error path tetap harus tersimpan supaya percakapan tidak hilang
+      // ketika user pindah halaman atau membuka ulang project.
+      persistSession(currentSession);
     } finally {
       setAgentStatus('idle');
       activeCancellationController = null;
@@ -4614,14 +4756,42 @@ User request:
 });
 
 // 7. GET/POST/DELETE /api/chats
+function chatsDirForProject(projectId: string): string {
+  return path.join(projectDirFor(projectId), '.males_ngonten', 'chats');
+}
+
 app.get('/api/chats', (req, res) => {
   // Metadata only — transcripts are loaded lazily per session.
+  const projectId = String(req.query.projectId || '');
+  if (
+    isValidProjectId(projectId) &&
+    fs.existsSync(projectDirFor(projectId)) &&
+    path.basename(ACTIVE_PROJECT_DIR) !== projectId
+  ) {
+    // Baca langsung dari disk project yang diminta tanpa mengaktifkannya,
+    // supaya daftar sesi selalu cocok dengan project yang sedang dibuka UI.
+    const sessions = readChatSessionsFromDir(chatsDirForProject(projectId));
+    return res.json({
+      sessions: sessions.map(toSessionSummary),
+      activeSessionId: sessions[0]?.id || null,
+    });
+  }
   res.json({ sessions: chatSessions.map(toSessionSummary), activeSessionId });
 });
 
 // GET /api/chats/:id/messages - paginated transcript for one session
 app.get('/api/chats/:id/messages', (req, res) => {
-  const session = chatSessions.find((s) => s.id === req.params.id);
+  const projectId = String(req.query.projectId || '');
+  let session = chatSessions.find((s) => s.id === req.params.id);
+  if (
+    isValidProjectId(projectId) &&
+    fs.existsSync(projectDirFor(projectId)) &&
+    path.basename(ACTIVE_PROJECT_DIR) !== projectId
+  ) {
+    session = readChatSessionsFromDir(chatsDirForProject(projectId)).find(
+      (s) => s.id === req.params.id
+    );
+  }
   if (!session) {
     return res.status(404).json({ success: false, error: 'Session not found' });
   }
@@ -4644,33 +4814,80 @@ app.get('/api/chats/:id/messages', (req, res) => {
 });
 
 app.post('/api/chats', (req, res) => {
-  const newId = 'session-' + Date.now();
+  const { title, silent, sessionId, projectId } = req.body || {};
+
+  // Pastikan sesi dibuat di project yang diminta, bukan di project yang kebetulan aktif.
+  if (
+    typeof projectId === 'string' &&
+    projectId &&
+    isValidProjectId(projectId) &&
+    fs.existsSync(projectDirFor(projectId)) &&
+    path.basename(ACTIVE_PROJECT_DIR) !== projectId
+  ) {
+    if (agentStatus !== 'idle') {
+      return res.status(409).json({
+        error: 'Agent sedang memproses project lain. Tunggu sampai selesai.',
+      });
+    }
+    setActiveProjectDir(projectId);
+  }
+
+  // Idempotent: client boleh mengirim ulang request dengan sessionId yang sama
+  // (mis. retry setelah jaringan putus) tanpa membuat sesi duplikat.
+  const requestedId =
+    typeof sessionId === 'string' && /^[A-Za-z0-9_-]+$/.test(sessionId)
+      ? sessionId
+      : '';
+  if (requestedId) {
+    const existing = chatSessions.find((s) => s.id === requestedId);
+    if (existing) {
+      activeSessionId = existing.id;
+      return res.json({
+        success: true,
+        existing: true,
+        session: toSessionSummary(existing),
+        activeSessionId,
+      });
+    }
+  }
+
+  const newId = requestedId || `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const nowIso = new Date().toISOString();
   const welcomeText = 'Sesi baru dimulai. Berikan instruksi untuk membuat atau mengedit video Remotion!';
+  // Sesi "silent" dibuat tanpa welcome message: pesan pertama user dari
+  // Dashboard akan menjadi pesan pertama di riwayat project.
+  const messages: any[] = silent
+    ? []
+    : [
+        {
+          id: 'msg-init-' + Date.now(),
+          role: 'assistant',
+          text: welcomeText,
+          content: welcomeText,
+          timestamp: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
+        },
+      ];
   const newSession = {
     id: newId,
-    title: req.body.title || 'Obrolan Baru',
-    createdAt: 'Hari ini',
-    updatedAt: 'Baru saja',
-    messagesCount: 1,
-    lastMessagePreview: welcomeText,
+    title: (typeof title === 'string' && title.trim()) || 'Obrolan Baru',
+    createdAt: nowIso,
+    updatedAt: nowIso,
+    messagesCount: messages.length,
+    lastMessagePreview: messages.length ? welcomeText : '',
     isPinned: false,
     isArchived: false,
     isDeleted: false,
     tags: [],
-    messages: [
-      {
-        id: 'msg-init-' + Date.now(),
-        role: 'assistant',
-        text: welcomeText,
-        content: welcomeText,
-        timestamp: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
-      },
-    ],
+    messages,
   };
   chatSessions.unshift(newSession);
   activeSessionId = newId;
   persistSession(newSession);
-  res.json({ success: true, session: toSessionSummary(newSession) });
+  res.json({
+    success: true,
+    session: toSessionSummary(newSession),
+    activeSessionId,
+  });
 });
 
 app.delete('/api/chats/:id', (req, res) => {

@@ -37,7 +37,58 @@ import { ProjectDashboard } from './components/dashboard/ProjectDashboard';
 import AllProjectsPage from './components/dashboard/AllProjectsPage';
 import TrashPage from './components/dashboard/TrashPage';
 import { projectService, Project } from './services/ProjectService';
+import { studioAgentClient } from './services/HttpAgentAdapter';
 import { X, Sparkles, MessageSquare, Trash2 } from 'lucide-react';
+
+type LaunchAspectRatio = '9:16' | '16:9' | '1:1' | '4:5';
+
+interface PendingLaunch {
+  projectId: string;
+  prompt: string;
+  aspectRatio: LaunchAspectRatio;
+  sessionId: string;
+  clientUserMessageId: string;
+  clientMessageId: string;
+  agentContext: string;
+  createdAt: number;
+  /** Set when the last send attempt failed; prevents an automatic retry loop. */
+  error?: string;
+}
+
+const PENDING_LAUNCH_KEY = 'males_studio_pending_launch';
+const PENDING_PROMPT_KEY = 'males_studio_pending_prompt';
+
+function readPendingLaunch(): PendingLaunch | null {
+  try {
+    const raw = localStorage.getItem(PENDING_LAUNCH_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed?.projectId || !parsed?.prompt || !parsed?.sessionId) return null;
+    return parsed as PendingLaunch;
+  } catch {
+    return null;
+  }
+}
+
+function readPendingAIPrompt(): { prompt: string; aspectRatio: LaunchAspectRatio } | null {
+  try {
+    const raw = localStorage.getItem(PENDING_PROMPT_KEY);
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed?.prompt) {
+        return {
+          prompt: String(parsed.prompt),
+          aspectRatio: (parsed.aspectRatio || '9:16') as LaunchAspectRatio,
+        };
+      }
+    } catch {}
+    // Legacy format: plain prompt string.
+    return { prompt: raw, aspectRatio: '9:16' };
+  } catch {
+    return null;
+  }
+}
 
 const COMPOSITION_SAMPLE_CODE = `// ShortVideoComposition.tsx
 // Project baru dimulai dari kanvas kosong.
@@ -83,14 +134,15 @@ export default function App() {
   const [showTrash, setShowTrash] = useState(false);
   const [isLoadingProject, setIsLoadingProject] = useState(false);
   const [loadedProjectId, setLoadedProjectId] = useState<string | null>(null);
-  const [pendingAIPrompt, setPendingAIPrompt] = useState<string | null>(() => {
-    try {
-      return localStorage.getItem('males_studio_pending_prompt');
-    } catch {
-      return null;
-    }
-  });
-  const [pendingSendPrompt, setPendingSendPrompt] = useState<string | null>(null);
+  const [pendingAIPrompt, setPendingAIPrompt] = useState<{
+    prompt: string;
+    aspectRatio: LaunchAspectRatio;
+  } | null>(() => readPendingAIPrompt());
+  // Launch flow state survives navigation/reopen so the first prompt is never
+  // lost (and is sent exactly once) even if the project page reloads.
+  const [pendingLaunch, setPendingLaunch] = useState<PendingLaunch | null>(() => readPendingLaunch());
+  const launchInFlightRef = useRef(false);
+  const launchAttemptRef = useRef<string | null>(null);
   const [pendingAgentTask, setPendingAgentTask] = useState<any | null>(null);
 
   const {
@@ -107,6 +159,7 @@ export default function App() {
     agentStatus,
     sessions,
     activeSessionId,
+    isChatReady,
     messages,
     activeToolCalls,
     assets,
@@ -422,6 +475,8 @@ export default function App() {
   // Load the isolated workspace whenever a project is opened.
   useEffect(() => {
     studioWorkspace.setProjectId(activeProjectId);
+    // Chat sessions/messages are scoped to the active project as well.
+    studioAgentClient.setProjectId(activeProjectId);
 
     if (!activeProjectId) {
       setLoadedProjectId(null);
@@ -629,8 +684,17 @@ export default function App() {
         return;
       }
       await projectService.setActiveProject(projectId);
+      studioAgentClient.setProjectId(projectId);
       setActiveProject(project);
       setActiveProjectId(projectId);
+
+      // Re-arm a launch that was persisted before navigation/reload. The
+      // orchestrator sends it once the workspace + chat are ready.
+      const storedLaunch = readPendingLaunch();
+      if (storedLaunch && storedLaunch.projectId === projectId) {
+        setPendingLaunch(storedLaunch);
+      }
+
       setShowDashboard(false);
 
       // Check for pending agent task
@@ -696,45 +760,102 @@ export default function App() {
   const handleNewProjectWithPrompt = useCallback(
     async (prompt: string, aspectRatio: '9:16' | '16:9' | '1:1' | '4:5' = '9:16') => {
       const trimmed = prompt.trim();
-      if (!trimmed) return;
+      if (!trimmed) return false;
+      if (launchInFlightRef.current) return false;
+      launchInFlightRef.current = true;
 
       try {
+        // 1) Validate AI configuration BEFORE creating anything. The prompt is
+        // preserved and Settings opens so the user can continue afterwards.
+        const aiConfigured = Boolean(agentSettings.apiBaseUrl && agentSettings.modelId);
+        if (!aiConfigured) {
+          try {
+            localStorage.setItem(
+              PENDING_PROMPT_KEY,
+              JSON.stringify({ prompt: trimmed, aspectRatio })
+            );
+          } catch {}
+          setPendingAIPrompt({ prompt: trimmed, aspectRatio });
+          showToast('Atur koneksi AI dulu. Prompt kamu disimpan dan akan dilanjutkan otomatis.');
+          setIsSettingsOpen(true);
+          return false;
+        }
+
+        // 2) Validate the real backend before creating a project.
+        const backendOk = await studioAgentClient.checkConnection();
+        if (!backendOk) {
+          showToast(
+            'Backend tidak dapat dijangkau. Prompt belum dikirim — coba lagi setelah server aktif.'
+          );
+          return false;
+        }
+
+        // 3) Create + activate the real project folder.
         const name = trimmed.length > 52 ? `${trimmed.slice(0, 52)}…` : trimmed;
         const project = await projectService.createProject(name, aspectRatio, trimmed);
         await projectService.setActiveProject(project.id);
+
+        // Guard against a localStorage-only fallback project: the AI can only
+        // work inside a folder that really exists on the backend.
+        const listRes = await fetch('/api/projects');
+        const listData = listRes.ok ? await listRes.json() : null;
+        if (!listData?.projects?.some((p: any) => p.id === project.id)) {
+          showToast('Project gagal dibuat di server. Silakan coba lagi.');
+          return false;
+        }
+
+        // 4) Bind the agent client to the new project BEFORE creating the
+        // session, otherwise the session would land in the previous project.
+        studioAgentClient.setProjectId(project.id);
+
+        const sessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const title = trimmed.length > 50 ? `${trimmed.slice(0, 47)}...` : trimmed;
+
+        // 5) Pre-create a silent session (no welcome message) so the Dashboard
+        // prompt becomes the FIRST message. If this call fails, the prompt
+        // endpoint creates the same session id on demand, so we still continue.
+        try {
+          await studioAgentClient.createSession(title, {
+            sessionId,
+            silent: true,
+            projectId: project.id,
+          });
+        } catch (sessionErr) {
+          console.warn('[Launch] Pre-create session gagal, prompt endpoint akan membuatnya:', sessionErr);
+        }
+
+        const launch: PendingLaunch = {
+          projectId: project.id,
+          prompt: trimmed,
+          aspectRatio,
+          sessionId,
+          clientUserMessageId: `msg-usr-launch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          clientMessageId: `msg-ai-launch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          createdAt: Date.now(),
+          agentContext:
+            'Project ini baru saja dibuat dari Dashboard dengan timeline kosong. Langsung buat konten video sesuai permintaan user. Tulis timeline.json dengan minimal 1 layer visual dan 1 layer teks, serta komponen Remotion di src/Composition.tsx. Jangan hanya menjawab dengan teks atau analisis — hasil akhir WAJIB berupa timeline.json dan komponen yang berisi konten video.',
+        };
+
+        try {
+          localStorage.setItem(PENDING_LAUNCH_KEY, JSON.stringify(launch));
+        } catch {}
+        setPendingLaunch(launch);
+
+        // 6) Navigate to Studio immediately. ChatPanel shows the pending prompt
+        // while the workspace loads, so the screen is never blank.
         setActiveProject(project);
         setActiveProjectId(project.id);
         setShowDashboard(false);
-
-        const aiConfigured = Boolean(agentSettings.apiBaseUrl && agentSettings.modelId);
-        if (!aiConfigured || !isBackendAvailable) {
-          // Simpan prompt untuk diproses setelah AI dikonfigurasi
-          try {
-            localStorage.setItem('males_studio_pending_prompt', trimmed);
-          } catch {}
-          setPendingAIPrompt(trimmed);
-          showToast('Project dibuat. Silakan atur API AI di Pengaturan untuk otomatis generate konten.');
-          return;
-        }
-
-        // Tambahkan konteks khusus: ini project baru yang dibuat melalui chat dashboard.
-        // AI WAJIB langsung membuat konten video (timeline + komponen), bukan cuma ngomong-ngomong.
-        const promptWithContext =
-          `[PROJECT BARU VIA CHAT DASHBOARD] ${trimmed}\n\nInstruksi untuk AI: Project baru baru saja dibuat dengan timeline kosong. Langsung buat konten video sesuai permintaan di atas. Tulis timeline.json dengan minimal 1 layer visual dan 1 layer teks, dan tulis komponen Remotion di src/Composition.tsx. Jangan hanya memberikan jawaban teks atau analisis — hasil akhir WAJIB berupa file timeline.json dan src/Composition.tsx yang sudah berisi konten video.`;
-
-        // Tunggu workspace dimuat baru baru kirim prompt ke AI
-        setPendingSendPrompt(promptWithContext);
-
-        // Kirim prompt ke AI agent setelah workspace siap
-        setTimeout(() => {
-          handleSendMessage(promptWithContext, []);
-        }, 1500);
-      } catch (e) {
+        return true;
+      } catch (e: any) {
         console.error('Failed to create project with AI:', e);
-        showToast('Gagal membuat project. Silakan coba lagi.');
+        showToast(`Gagal membuat project: ${e?.message || 'Silakan coba lagi.'}`);
+        return false;
+      } finally {
+        launchInFlightRef.current = false;
       }
     },
-    [agentSettings.apiBaseUrl, agentSettings.modelId, isBackendAvailable, showToast]
+    [agentSettings.apiBaseUrl, agentSettings.modelId, showToast]
   );
 
   const handleReturnToDashboard = useCallback(async () => {
@@ -775,16 +896,20 @@ export default function App() {
   const isAIConfigured = Boolean(agentSettings.apiBaseUrl && agentSettings.modelId);
 
   // Auto-continue a prompt that was saved while AI was not configured yet.
+  // Waiting for Settings to close ensures the new BYOK config is committed.
   useEffect(() => {
     if (!pendingAIPrompt || !isAIConfigured || !isBackendAvailable || isSettingsOpen) {
-      return;
+      return undefined;
     }
-    const prompt = pendingAIPrompt;
-    setPendingAIPrompt(null);
-    try {
-      localStorage.removeItem('males_studio_pending_prompt');
-    } catch {}
-    handleNewProjectWithPrompt(prompt);
+    const pending = pendingAIPrompt;
+    const timer = setTimeout(() => {
+      setPendingAIPrompt(null);
+      try {
+        localStorage.removeItem(PENDING_PROMPT_KEY);
+      } catch {}
+      handleNewProjectWithPrompt(pending.prompt, pending.aspectRatio);
+    }, 250);
+    return () => clearTimeout(timer);
   }, [
     pendingAIPrompt,
     isAIConfigured,
@@ -793,24 +918,85 @@ export default function App() {
     handleNewProjectWithPrompt,
   ]);
 
-  // Once the new project workspace has finished loading, run the saved prompt
-  // through the AI Agent exactly once.
+  // Launch orchestrator: wait until the workspace AND the chat reset have fully
+  // finished, then send the Dashboard prompt exactly once. This replaces the
+  // old racy setTimeout/pendingSendPrompt pair whose timer could fire before
+  // resetChatForProject() cleared the just-created message.
   useEffect(() => {
-    if (!pendingSendPrompt || !activeProjectId || isLoadingProject) {
-      return undefined;
-    }
-    const prompt = pendingSendPrompt;
-    setPendingSendPrompt(null);
-    const timer = setTimeout(() => {
-      handleSendMessage(prompt, []);
-    }, 800);
-    return () => clearTimeout(timer);
+    const launch = pendingLaunch;
+    if (!launch || launch.error) return;
+    if (launch.projectId !== activeProjectId) return;
+    if (isLoadingProject || loadedProjectId !== activeProjectId) return;
+    if (!isChatReady) return;
+    if (launchAttemptRef.current === launch.clientUserMessageId) return;
+
+    launchAttemptRef.current = launch.clientUserMessageId;
+    void (async () => {
+      const result = await handleSendMessage(launch.prompt, [], {
+        sessionId: launch.sessionId,
+        clientUserMessageId: launch.clientUserMessageId,
+        clientMessageId: launch.clientMessageId,
+        agentContext: launch.agentContext,
+        title:
+          launch.prompt.length > 50
+            ? `${launch.prompt.slice(0, 47)}...`
+            : launch.prompt,
+        silentSession: true,
+      });
+      launchAttemptRef.current = null;
+
+      if (result.ok) {
+        setPendingLaunch((prev) =>
+          prev && prev.clientUserMessageId === launch.clientUserMessageId ? null : prev
+        );
+        try {
+          localStorage.removeItem(PENDING_LAUNCH_KEY);
+        } catch {}
+      } else {
+        setPendingLaunch((prev) => {
+          if (!prev || prev.clientUserMessageId !== launch.clientUserMessageId) {
+            return prev;
+          }
+          const next: PendingLaunch = {
+            ...prev,
+            error: result.error || 'Gagal mengirim prompt ke AI.',
+          };
+          try {
+            localStorage.setItem(PENDING_LAUNCH_KEY, JSON.stringify(next));
+          } catch {}
+          return next;
+        });
+        showToast('AI gagal memproses prompt. Gunakan tombol Coba Lagi di panel chat.');
+      }
+    })();
   }, [
-    pendingSendPrompt,
+    pendingLaunch,
     activeProjectId,
     isLoadingProject,
+    loadedProjectId,
+    isChatReady,
     handleSendMessage,
+    showToast,
   ]);
+
+  const handleRetryLaunch = useCallback(() => {
+    setPendingLaunch((prev) => {
+      if (!prev) return prev;
+      // New assistant id => the backend runs the AI again instead of returning
+      // the previous terminal error. The user message id stays the same, so the
+      // retry cannot duplicate the prompt bubble.
+      const next: PendingLaunch = {
+        ...prev,
+        clientMessageId: `msg-ai-launch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        error: undefined,
+      };
+      try {
+        localStorage.setItem(PENDING_LAUNCH_KEY, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+    launchAttemptRef.current = null;
+  }, []);
 
   const activeSession = sessions.find((s) => s.id === activeSessionId);
   const currentSec = (currentFrame / timeline.fps).toFixed(2);
@@ -935,7 +1121,6 @@ export default function App() {
           onOpenSettings={openSettings}
           onOpenAllProjects={handleOpenAllProjects}
           onOpenTrash={handleOpenTrash}
-          isAIConfigured={isAIConfigured}
           isBackendAvailable={isBackendAvailable}
           isVisible={showDashboard || !activeProjectId}
         />
@@ -1057,6 +1242,7 @@ export default function App() {
             <ChatPanel
               messages={messages}
               isAgentWorking={
+                agentStatus === 'connecting' ||
                 agentStatus === 'thinking' ||
                 agentStatus === 'executing_tool' ||
                 agentStatus === 'streaming' ||
@@ -1066,6 +1252,22 @@ export default function App() {
               agentStatusDetail={agentStatusDetail}
               onSendMessage={handleSendMessage}
               onStopAgent={handleStopAgent}
+              isPreparingProject={Boolean(
+                pendingLaunch &&
+                  pendingLaunch.projectId === activeProjectId &&
+                  !pendingLaunch.error
+              )}
+              preparingPrompt={
+                pendingLaunch?.projectId === activeProjectId
+                  ? pendingLaunch?.prompt
+                  : undefined
+              }
+              launchError={
+                pendingLaunch?.projectId === activeProjectId
+                  ? pendingLaunch?.error
+                  : undefined
+              }
+              onRetryLaunch={handleRetryLaunch}
               currentSec={currentSec}
               selectedClipName={selectedClip?.name}
               selectedClip={selectedClip}

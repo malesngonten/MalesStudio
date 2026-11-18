@@ -20,6 +20,7 @@ import {
   Send,
   Type,
   Loader2,
+  RotateCcw,
 } from 'lucide-react';
 import { AgentMessage, AgentAttachment, AgentToolCall } from '../../contracts/agentProtocol';
 import { TimelineClip, TimelineLayer, TimelineData } from '../../types';
@@ -56,6 +57,13 @@ interface ChatPanelProps {
   activeSessionId?: string | null;
   /** Timeline data for contextual prompt suggestions */
   timeline?: TimelineData;
+  /** Dashboard launch is creating/loading the project + chat session. */
+  isPreparingProject?: boolean;
+  /** Prompt queued from Dashboard, shown while the project is being prepared. */
+  preparingPrompt?: string;
+  /** Last launch error; when set a retry action is offered. */
+  launchError?: string | null;
+  onRetryLaunch?: () => void;
 }
 
 const AI_DIRECTOR_PROMPTS = [
@@ -210,6 +218,10 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   onLoadOlderMessages,
   totalMessages = 0,
   activeSessionId = null,
+  isPreparingProject = false,
+  preparingPrompt,
+  launchError = null,
+  onRetryLaunch,
 }) => {
   const [inputText, setInputText] = useState('');
   const [attachments, setAttachments] = useState<AgentAttachment[]>([]);
@@ -556,7 +568,58 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
           </div>
         )}
 
-        {messages.length === 0 && (
+        {launchError && (
+          <div className="my-3 mx-auto max-w-md w-full rounded-2xl bg-red-950/50 p-3.5 shadow-lg">
+            <div className="flex items-start gap-2">
+              <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-red-500/20 text-[11px] font-bold text-red-300">
+                !
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-semibold text-red-200">
+                  Prompt belum berhasil diproses
+                </p>
+                <p className="mt-1 break-words text-[11px] leading-relaxed text-zinc-400">
+                  {launchError}
+                </p>
+                {onRetryLaunch && (
+                  <button
+                    type="button"
+                    onClick={onRetryLaunch}
+                    className="mt-2.5 inline-flex items-center gap-1.5 rounded-xl bg-red-600 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-red-500"
+                  >
+                    <RotateCcw className="h-3 w-3" />
+                    Coba Lagi
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {messages.length === 0 && isPreparingProject && (
+          <div className="py-8 sm:py-10 text-center space-y-4 max-w-md mx-auto flex flex-col items-center">
+            <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-zinc-850 text-zinc-200 text-xs font-medium shadow-md">
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-red-400" />
+              <span>Menyiapkan project &amp; sesi chat...</span>
+            </div>
+
+            <div className="w-full rounded-2xl bg-zinc-900/90 p-3.5 text-left shadow-md">
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+                Prompt kamu
+              </div>
+              <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-zinc-200">
+                {preparingPrompt || 'Menyiapkan prompt...'}
+              </p>
+            </div>
+
+            <p className="text-xs leading-relaxed text-zinc-400 max-w-xs">
+              AI Agent akan mulai mengerjakan prompt ini secara otomatis begitu
+              workspace siap. Tidak perlu mengirim ulang.
+            </p>
+          </div>
+        )}
+
+        {messages.length === 0 && !isPreparingProject && !launchError && (
           <div className="py-10 text-center space-y-4 max-w-md mx-auto flex flex-col items-center">
             <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-zinc-850 text-zinc-300 text-xs font-medium shadow-md">
               <span className="w-5 h-5 rounded-full bg-gradient-to-tr from-red-500 to-rose-400 text-white font-bold text-[11px] flex items-center justify-center">

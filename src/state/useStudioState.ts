@@ -75,6 +75,9 @@ export function useStudioState() {
   // null saat tidak ada sesi aktif sama sekali — session dibuat saat user kirim prompt pertama
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<AgentMessage[]>([]);
+  // False selama chat project di-reset/dimuat ulang. App menunggu flag ini
+  // sebelum mengirim prompt Dashboard agar tidak terhapus oleh reset.
+  const [isChatReady, setIsChatReady] = useState(false);
   // Pagination for long transcripts — only one page is in the DOM at a time.
   const [messagesHasMore, setMessagesHasMore] = useState(false);
   const [messagesOldestIndex, setMessagesOldestIndex] = useState(0);
@@ -144,6 +147,7 @@ export function useStudioState() {
 
   // Sync timeline changes to backend and localStorage
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const chatResetSeqRef = useRef(0);
   const streamingMsgRef = useRef<string | null>(null);
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
 
@@ -159,7 +163,7 @@ export function useStudioState() {
     if (!pending) return;
     setMessages((prev) =>
       prev.map((m) =>
-        m.id === pending.id || m.status === 'streaming'
+        m.id === pending.id
           ? { ...m, content: pending.content, text: pending.content, status: 'streaming' }
           : m
       )
@@ -190,8 +194,41 @@ export function useStudioState() {
 
   // Load/apply paginated transcript pages without ever holding the full
   // conversation in the React tree.
-  const applySessionPage = useCallback((page: AgentMessagePage) => {
-    setMessages(deduplicateMessages(page.messages));
+  const applySessionPage = useCallback((page: AgentMessagePage, sessionId?: string) => {
+    // Restore the live streaming state only when the backend is still working
+    // on THIS session. Otherwise a stale 'streaming' placeholder from a crashed
+    // run would show an endless spinner after reopening the project.
+    const backendActiveSession = studioAgentClient.getActiveSessionId?.() ?? null;
+    const backendStatus = studioAgentClient.getStatus();
+    const isThisSessionLive = Boolean(
+      sessionId && backendActiveSession === sessionId && backendStatus !== 'idle'
+    );
+
+    const normalized = page.messages.map((m) => {
+      if (m.role === 'assistant' && m.status === 'streaming' && !isThisSessionLive) {
+        const note = '⚠️ Proses AI sebelumnya terhenti sebelum selesai. Silakan kirim ulang perintah atau coba lagi.';
+        return {
+          ...m,
+          status: 'failed' as const,
+          content: m.content || note,
+          text: m.text || m.content || note,
+        };
+      }
+      return m;
+    });
+
+    const liveMessage = isThisSessionLive
+      ? normalized.find((m) => m.role === 'assistant' && m.status === 'streaming')
+      : undefined;
+    if (liveMessage) {
+      streamingMsgRef.current = liveMessage.id;
+      setStreamingMessageId(liveMessage.id);
+    } else {
+      streamingMsgRef.current = null;
+      setStreamingMessageId(null);
+    }
+
+    setMessages(deduplicateMessages(normalized));
     setMessagesHasMore(page.hasMore);
     setMessagesOldestIndex(page.oldestIndex);
     setMessagesTotal(page.total);
@@ -201,7 +238,7 @@ export function useStudioState() {
   const loadLatestSessionMessages = useCallback(
     async (sessionId: string) => {
       const page = await studioAgentClient.loadSessionMessages(sessionId, { limit: 30 });
-      applySessionPage(page);
+      applySessionPage(page, sessionId);
     },
     [applySessionPage]
   );
@@ -295,7 +332,61 @@ export function useStudioState() {
       setAgentStatus(status);
       if (extra) setAgentStatusDetail(extra);
     });
-  }, []);
+
+    // Persistent listeners: keep the transcript live even when the message was
+    // started elsewhere (e.g. Dashboard launch) or the project was reopened
+    // while the agent is still working.
+    const unsubText = studioAgentClient.onTextChunk?.((msgId, chunk, accumulated) => {
+      if (!msgId) return;
+      streamingMsgRef.current = msgId;
+      setStreamingMessageId((prev) => prev || msgId);
+      const content = typeof accumulated === 'string' ? accumulated : chunk;
+      scheduleStreamingUpdate(msgId, content);
+    });
+
+    const unsubTool = studioAgentClient.onToolUpdate?.((msgId, toolCall) => {
+      setActiveToolCalls((prev) => [
+        ...prev.filter((t) => t.id !== toolCall.id),
+        toolCall,
+      ]);
+    });
+
+    const unsubComplete = studioAgentClient.onMessageComplete?.((message, _sessionId) => {
+      setMessages((prev) => {
+        const exists = prev.some((m) => m.id === message.id);
+        if (!exists) return prev;
+        return prev.map((m) =>
+          m.id === message.id
+            ? {
+                ...m,
+                content: message.content || m.content,
+                text: message.text || m.text,
+                status: message.status || 'completed',
+                toolCalls: message.toolCalls || m.toolCalls,
+                checkpointHash: message.checkpointHash ?? m.checkpointHash,
+                canRevert: message.canRevert ?? m.canRevert,
+              }
+            : m
+        );
+      });
+      if (streamingMsgRef.current === message.id) {
+        streamingMsgRef.current = null;
+        setStreamingMessageId(null);
+      }
+      setAgentStatus('idle');
+      // Refresh history metadata (preview/count) without blocking the chat.
+      studioAgentClient
+        .getSessions()
+        .then((list) => setSessions(list))
+        .catch(() => {});
+    });
+
+    return () => {
+      unsubText?.();
+      unsubTool?.();
+      unsubComplete?.();
+    };
+  }, [scheduleStreamingUpdate]);
 
   // Load initial workspace state, timeline, assets, & sessions
   useEffect(() => {
@@ -326,33 +417,39 @@ export function useStudioState() {
       .catch(() => {});
 
     // Connect agent
-    studioAgentClient.connect().then(() => {
-      if (!mounted) return;
-      studioAgentClient.getSessions().then((sList) => {
+    studioAgentClient
+      .connect()
+      .then(() => {
         if (!mounted) return;
-        setSessions(sList);
-        
-        // Restore last active session from localStorage, or fall back to most recent
-        const savedActiveId = typeof window !== 'undefined' ? localStorage.getItem('males_ngonten_last_session') : null;
-        const validSaved = savedActiveId && sList.some((s) => s.id === savedActiveId && !s.isDeleted && !s.isArchived);
-        const targetSession = validSaved 
-          ? sList.find((s) => s.id === savedActiveId)!
-          : sList.find((s) => !s.isDeleted && !s.isArchived);
-        
-        if (targetSession) {
-          setActiveSessionId(targetSession.id);
-          loadLatestSessionMessages(targetSession.id).catch(() => {
-            if (mounted) setMessages([]);
-          });
-        } else {
-          // No valid sessions - don't auto-create, wait for user action
-          setActiveSessionId(null);
-          setMessages([]);
-          setMessagesHasMore(false);
-          setMessagesTotal(0);
-        }
+        return studioAgentClient.getSessions().then(async (sList) => {
+          if (!mounted) return;
+          setSessions(sList);
+
+          // Restore last active session from localStorage, or fall back to most recent
+          const savedActiveId = typeof window !== 'undefined' ? localStorage.getItem('males_ngonten_last_session') : null;
+          const validSaved = savedActiveId && sList.some((s) => s.id === savedActiveId && !s.isDeleted && !s.isArchived);
+          const targetSession = validSaved
+            ? sList.find((s) => s.id === savedActiveId)!
+            : sList.find((s) => !s.isDeleted && !s.isArchived);
+
+          if (targetSession) {
+            setActiveSessionId(targetSession.id);
+            await loadLatestSessionMessages(targetSession.id).catch(() => {
+              if (mounted) setMessages([]);
+            });
+          } else {
+            // No valid sessions - don't auto-create, wait for user action
+            setActiveSessionId(null);
+            setMessages([]);
+            setMessagesHasMore(false);
+            setMessagesTotal(0);
+          }
+        });
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (mounted) setIsChatReady(true);
       });
-    });
 
     return () => {
       mounted = false;
@@ -487,16 +584,42 @@ export function useStudioState() {
     [syncTimelineToWorkspace, showToast]
   );
 
-  // Send message to AI Agent
+  // Send message to AI Agent.
+  // Returns a structured result so callers (Dashboard launch flow) can decide
+  // whether to keep/clear their pending prompt and whether to offer a retry.
   const handleSendMessage = useCallback(
-    async (text: string, attachments: AgentAttachment[] = []) => {
-      if (!text.trim() && attachments.length === 0) return;
+    async (
+      text: string,
+      attachments: AgentAttachment[] = [],
+      options?: {
+        /** Explicit session target. When omitted, the active (or a new) session is used. */
+        sessionId?: string | null;
+        /** Internal instructions injected into the system prompt, not shown as a bubble. */
+        agentContext?: string;
+        /** Stable idempotency key for the user message. */
+        clientUserMessageId?: string;
+        /** Stable idempotency key for the assistant placeholder. */
+        clientMessageId?: string;
+        /** Session title to use when a new session has to be created. */
+        title?: string;
+        /** Create the session without a welcome message (Dashboard launch). */
+        silentSession?: boolean;
+      }
+    ): Promise<{ ok: boolean; sessionId?: string; messageId?: string; error?: string }> => {
+      if (!text.trim() && attachments.length === 0) {
+        return { ok: false, error: 'Pesan kosong.' };
+      }
 
-      setAgentStatus('thinking');
+      setAgentStatus('connecting');
+      setActiveToolCalls([]);
       streamingMsgRef.current = null;
       cancelPendingStream();
+
+      const userMsgId =
+        options?.clientUserMessageId ||
+        `user-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       const tempUserMsg: AgentMessage = {
-        id: `user-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        id: userMsgId,
         role: 'user',
         content: text,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
@@ -513,60 +636,89 @@ export function useStudioState() {
         },
       };
 
-      // Add user message immediately to conversation
-      setMessages((prev) => deduplicateMessages([...prev, tempUserMsg]));
+      // Add user message immediately (idempotent for retries with the same id).
+      setMessages((prev) =>
+        prev.some((m) => m.id === userMsgId)
+          ? prev
+          : deduplicateMessages([...prev, tempUserMsg])
+      );
 
       // Check backend connectivity before sending to AI
       const backendOk = await studioAgentClient.checkConnection();
       setIsBackendAvailable(backendOk);
       if (!backendOk) {
+        const error =
+          'Tidak dapat terhubung ke backend server. Pastikan server Males Ngonten Studio sedang berjalan di port 3000.';
         setAgentStatus('idle');
-        setMessages((prev) => [...prev, {
-          id: `err-${Date.now()}`,
-          role: 'assistant',
-          content: '❌ Tidak dapat terhubung ke backend server. Pastikan server Males Ngonten Studio sedang berjalan di port 3000.',
-          text: '❌ Tidak dapat terhubung ke backend server. Pastikan server Males Ngonten Studio sedang berjalan di port 3000.',
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          status: 'error',
-        }]);
-        return;
+        setMessages((prev) => {
+          const id = `err-connect-${userMsgId}`;
+          if (prev.some((m) => m.id === id)) return prev;
+          return [
+            ...prev,
+            {
+              id,
+              role: 'assistant',
+              content: `❌ ${error}`,
+              text: `❌ ${error}`,
+              timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              status: 'error',
+            },
+          ];
+        });
+        return { ok: false, error };
       }
 
-      // Buat session baru otomatis jika belum ada (user baru mulai chat)
-      if (!activeSessionId) {
+      // Resolve the exact session. Never silently fall back to another
+      // project/session when the caller requested one.
+      let sessionId =
+        options?.sessionId ||
+        activeSessionId ||
+        studioAgentClient.getCurrentSessionId?.() ||
+        null;
+      if (!sessionId) {
         try {
-          // Create session with a temporary title; will be renamed after first message
-          const newSession = await studioAgentClient.createSession();
+          const title =
+            options?.title ||
+            (text.trim().length > 50 ? `${text.trim().slice(0, 47)}...` : text.trim());
+          const newSession = await studioAgentClient.createSession(title, {
+            silent: Boolean(options?.silentSession),
+          });
+          sessionId = newSession.id;
           setSessions(await studioAgentClient.getSessions());
           setActiveSessionId(newSession.id);
           if (typeof window !== 'undefined') {
             localStorage.setItem('males_ngonten_last_session', newSession.id);
           }
-          // JANGAN panggil loadLatestSessionMessages di sini —
-          // user message sudah ada di local state (line 646), dan backend
-          // akan menyimpannya ke session saat memproses prompt.
-          // Memanggil loadLatestSessionMessages akan menimpa local message
-          // dengan hanya welcome message dari server.
-          
-          // Rename session immediately based on first user message
-          // so history shows meaningful title right away
-          const title = text.trim().length > 50 ? text.trim().slice(0, 47) + '...' : text.trim();
-          if (title) {
-            studioAgentClient.renameSession(newSession.id, title).then(() => {
-              setSessions((prev) => prev.map((s) => s.id === newSession.id ? { ...s, title } : s));
-            }).catch(console.error);
-          }
-        } catch (e) {
-          console.error('Failed to create session for first message:', e);
-          showToast('Gagal membuat sesi chat. Silakan coba lagi.');
-          return;
+        } catch (e: any) {
+          console.error('Failed to create session for message:', e);
+          const error = e?.message || 'Gagal membuat sesi chat.';
+          setAgentStatus('idle');
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `err-session-${userMsgId}`,
+              role: 'assistant',
+              content: `❌ ${error}`,
+              text: `❌ ${error}`,
+              timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              status: 'error',
+            },
+          ]);
+          return { ok: false, sessionId: undefined, error };
+        }
+      } else {
+        setActiveSessionId(sessionId);
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('males_ngonten_last_session', sessionId);
         }
       }
 
       try {
         // Placeholder pesan AI: shimmer ditampilkan sebelum token pertama diterima.
         // Gunakan clientMessageId agar ID selaras dengan backend SSE (text_chunk & message_complete).
-        const clientMessageId = `msg-ai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const clientMessageId =
+          options?.clientMessageId ||
+          `msg-ai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         const placeholderId = clientMessageId;
         const placeholderMsg: AgentMessage = {
           id: placeholderId,
@@ -578,7 +730,12 @@ export function useStudioState() {
         };
         streamingMsgRef.current = placeholderId;
         setStreamingMessageId(placeholderId);
-        setMessages((prev) => deduplicateMessages([...prev, placeholderMsg]));
+        setMessages((prev) =>
+          prev.some((m) => m.id === placeholderId)
+            ? prev
+            : deduplicateMessages([...prev, placeholderMsg])
+        );
+        setAgentStatus('thinking');
 
         const assistantMsg = await studioAgentClient.sendMessage(
           text,
@@ -589,6 +746,9 @@ export function useStudioState() {
             selectedClip,
             activeFile: 'ShortVideoComposition.tsx',
             clientMessageId,
+            clientUserMessageId: userMsgId,
+            sessionId,
+            agentContext: options?.agentContext,
             byok: {
               baseUrl: agentSettings.apiBaseUrl,
               apiKey: agentSettings.apiKey,
@@ -614,67 +774,59 @@ export function useStudioState() {
           }
         );
 
-        // Replace streaming message with final message
-        // Coba update via streamingMsgRef.current dulu; kalau tidak ketemu, cari
-        // pesan mana pun yang masih status streaming; kalau juga tidak ada, tambahkan baru.
+        // Replace streaming placeholder with the final message.
         cancelPendingStream();
         const finalContent = assistantMsg.content || assistantMsg.text || '';
-        if (streamingMsgRef.current) {
+        setMessages((prev) => {
           let replaced = false;
-          setMessages((prev) => {
-            const next = prev.map((m) => {
-              if (m.id === streamingMsgRef.current) {
-                replaced = true;
-                return {
-                  ...m,
-                  content: finalContent || m.content,
-                  text: finalContent || m.text,
-                  status: assistantMsg.status || 'completed',
-                  toolCalls: assistantMsg.toolCalls,
-                  checkpointHash: assistantMsg.checkpointHash,
-                  canRevert: assistantMsg.canRevert,
-                };
-              }
-              return m;
-            });
-            // Fallback: kalau ID tidak cocok, ubah pesan mana pun yang masih streaming
-            if (!replaced) {
-              return next.map((m) =>
-                m.status === 'streaming'
-                  ? {
-                      ...m,
-                      content: finalContent || m.content,
-                      text: finalContent || m.text,
-                      status: assistantMsg.status || 'completed',
-                      toolCalls: assistantMsg.toolCalls,
-                      checkpointHash: assistantMsg.checkpointHash,
-                      canRevert: assistantMsg.canRevert,
-                    }
-                  : m
-              );
+          const next = prev.map((m) => {
+            if (m.id === placeholderId) {
+              replaced = true;
+              return {
+                ...m,
+                content: finalContent || m.content,
+                text: finalContent || m.text,
+                status: assistantMsg.status || 'completed',
+                toolCalls: assistantMsg.toolCalls,
+                checkpointHash: assistantMsg.checkpointHash,
+                canRevert: assistantMsg.canRevert,
+                tokenUsage: assistantMsg.tokenUsage,
+              };
             }
-            return next;
+            return m;
           });
-          streamingMsgRef.current = null;
-          setStreamingMessageId(null);
-        } else {
-          setMessages((prev) => {
-            const exists = prev.some((m) => m.id === assistantMsg.id);
-            if (exists) {
-              return prev.map((m) => (m.id === assistantMsg.id ? assistantMsg : m));
-            }
-            return [...prev, assistantMsg];
-          });
-        }
+          if (replaced) return next;
+          const exists = next.some((m) => m.id === assistantMsg.id);
+          if (exists) {
+            return next.map((m) =>
+              m.id === assistantMsg.id
+                ? { ...m, ...assistantMsg, content: finalContent || m.content, text: finalContent || m.text }
+                : m
+            );
+          }
+          return [...next, assistantMsg];
+        });
+        streamingMsgRef.current = null;
+        setStreamingMessageId(null);
+        setAgentStatus('idle');
 
-        // Update agent status based on result
-        if (assistantMsg.status === 'failed' || assistantMsg.status === 'error') {
-          setAgentStatus('idle');
-        } else {
-          setAgentStatus('idle');
-        }
-      } catch (err) {
-        setIsBackendAvailable(false);
+        const terminalStatus = assistantMsg.status || 'completed';
+        const failed = terminalStatus === 'failed' || terminalStatus === 'error';
+
+        // Keep history metadata fresh (preview, count, ordering).
+        studioAgentClient
+          .getSessions()
+          .then((list) => setSessions(list))
+          .catch(() => {});
+
+        return {
+          ok: !failed,
+          sessionId,
+          messageId: assistantMsg.id,
+          error: failed ? finalContent || 'AI gagal memproses permintaan.' : undefined,
+        };
+      } catch (err: any) {
+        setIsBackendAvailable(true);
         cancelPendingStream();
         const errMessage = err?.message || 'Terjadi kesalahan tidak diketahui';
 
@@ -687,23 +839,25 @@ export function useStudioState() {
                 : m
             )
           );
-          streamingMsgRef.current = null;
-          setStreamingMessageId(null);
         } else {
           // Tidak ada chunk streaming yang diterima — tambahkan pesan error sebagai balasan asisten
           // agar pengguna tidak melihat layar kosong atau indikator proses yang tetap aktif.
-          setMessages((prev) => [...prev, {
-            id: `err-${Date.now()}`,
-            role: 'assistant',
-            content: '❌ Gagal memproses permintaan: ' + errMessage,
-            text: '❌ Gagal memproses permintaan: ' + errMessage,
-            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            status: 'error',
-          }]);
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `err-send-${userMsgId}`,
+              role: 'assistant',
+              content: '❌ Gagal memproses permintaan: ' + errMessage,
+              text: '❌ Gagal memproses permintaan: ' + errMessage,
+              timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              status: 'error',
+            },
+          ]);
         }
         streamingMsgRef.current = null;
         setStreamingMessageId(null);
         setAgentStatus('idle');
+        return { ok: false, sessionId, error: errMessage };
       }
     },
     [currentFrame, timeline, selectedClip, selectedClipId, selectedLayer, agentSettings, activeSessionId, scheduleStreamingUpdate, cancelPendingStream]
@@ -773,8 +927,16 @@ export function useStudioState() {
   }, []);
 
   // Reset chat state when switching projects so history never leaks between
-  // isolated project workspaces.
+  // isolated project workspaces. `isChatReady` stays false until the reset and
+  // the latest transcript have finished loading — the Dashboard launch flow
+  // waits for it before sending its first prompt, which prevents the reset from
+  // wiping the newly created message.
   const resetChatForProject = useCallback(async () => {
+    const seq = ++chatResetSeqRef.current;
+    setIsChatReady(false);
+    cancelPendingStream();
+    streamingMsgRef.current = null;
+    setStreamingMessageId(null);
     setActiveSessionId(null);
     setMessages([]);
     setMessagesHasMore(false);
@@ -785,22 +947,30 @@ export function useStudioState() {
     if (typeof window !== 'undefined') {
       localStorage.removeItem('males_ngonten_last_session');
     }
-    const list = await refreshSessions();
 
-    // Muat sesi terakhir jika ada, jangan buat sesi baru setiap kali project dibuka.
-    if (list.length > 0) {
-      const latest = [...list].sort((a, b) => {
-        const da = new Date(a.updatedAt || 0).getTime();
-        const db = new Date(b.updatedAt || 0).getTime();
-        return db - da;
-      })[0];
-      setActiveSessionId(latest.id);
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('males_ngonten_last_session', latest.id);
+    try {
+      const list = await refreshSessions();
+      if (seq !== chatResetSeqRef.current) return;
+
+      // Muat sesi terakhir jika ada, jangan buat sesi baru setiap kali project dibuka.
+      if (list.length > 0) {
+        const latest = [...list].sort((a, b) => {
+          const da = new Date(a.updatedAt || 0).getTime();
+          const db = new Date(b.updatedAt || 0).getTime();
+          return db - da;
+        })[0];
+        setActiveSessionId(latest.id);
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('males_ngonten_last_session', latest.id);
+        }
+        await loadLatestSessionMessages(latest.id).catch(() => {});
       }
-      await loadLatestSessionMessages(latest.id);
+    } finally {
+      if (seq === chatResetSeqRef.current) {
+        setIsChatReady(true);
+      }
     }
-  }, [refreshSessions, loadLatestSessionMessages]);
+  }, [refreshSessions, loadLatestSessionMessages, cancelPendingStream]);
 
   // Delete chat session — selalu async, memperbarui state frontend langsung tanpa reload.
   // Saat gagal: data tetap utuh di UI dan pengguna diberi tahu via toast.
@@ -1104,6 +1274,7 @@ export function useStudioState() {
     sessions,
     activeSessionId,
     setActiveSessionId,
+    isChatReady,
     messages,
     messagesHasMore,
     messagesOldestIndex,

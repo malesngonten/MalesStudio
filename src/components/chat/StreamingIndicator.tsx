@@ -2,7 +2,7 @@ import React from 'react';
 
 interface StreamingIndicatorProps {
   /** Current agent status */
-  status?: 'thinking' | 'executing_tool' | 'streaming' | 'idle';
+  status?: 'connecting' | 'thinking' | 'executing_tool' | 'streaming' | 'idle';
   /** Current round number (1-5) */
   round?: number;
   /** Maximum rounds (usually 5) */
@@ -32,6 +32,8 @@ export const StreamingIndicator: React.FC<StreamingIndicatorProps> = ({
 
   const getStatusText = () => {
     switch (status) {
+      case 'connecting':
+        return 'Menghubungkan ke AI...';
       case 'thinking':
         return 'Memikirkan...';
       case 'executing_tool':

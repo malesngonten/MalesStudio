@@ -20,15 +20,17 @@ import { projectService } from '../../services/ProjectService';
 import type { Project } from '../../types';
 import { BottomSheet } from '../ui/BottomSheet';
 import { Toast } from '../ui/Toast';
-import { AINotConfiguredToast } from '../ui/AINotConfiguredToast';
 
 interface ProjectDashboardProps {
   onProjectSelect: (projectId: string) => void;
-  onNewProjectWithPrompt: (prompt: string, aspectRatio?: '9:16' | '16:9' | '1:1' | '4:5') => void;
+  /** Returns true when the launch flow actually started (project + session created). */
+  onNewProjectWithPrompt: (
+    prompt: string,
+    aspectRatio?: '9:16' | '16:9' | '1:1' | '4:5'
+  ) => Promise<boolean>;
   onOpenSettings: () => void;
   onOpenAllProjects: () => void;
   onOpenTrash: () => void;
-  isAIConfigured: boolean;
   isBackendAvailable: boolean;
   isVisible?: boolean;
 }
@@ -481,7 +483,6 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
   onOpenSettings,
   onOpenAllProjects,
   onOpenTrash,
-  isAIConfigured,
   isVisible,
 }) => {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -493,7 +494,6 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
   const [prompt, setPrompt] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [actionProject, setActionProject] = useState<Project | null>(null);
-  const [showAiWarning, setShowAiWarning] = useState(false);
   const [toast, setToast] = useState<{
     message: string;
     action?: { label: string; onClick: () => void };
@@ -579,17 +579,20 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
     }
   };
 
-  const handleSubmitPrompt = (e: React.FormEvent) => {
+  const handleSubmitPrompt = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!prompt.trim() || isSubmitting) return;
-    if (!isAIConfigured) {
-      // Pesan tidak dikirim dan teks tetap dipertahankan di input.
-      setShowAiWarning(true);
-      return;
-    }
     const trimmed = prompt.trim();
-    setPrompt('');
-    onNewProjectWithPrompt(trimmed, selectedRatio);
+    setIsSubmitting(true);
+    try {
+      // App validates AI configuration/backend and creates the real project +
+      // silent chat session. Only clear the prompt once the launch really starts;
+      // if AI is not configured the prompt is preserved and Settings opens.
+      const started = await onNewProjectWithPrompt(trimmed, selectedRatio);
+      if (started) setPrompt('');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleSuggestionClick = (suggestion: string) => {
@@ -925,12 +928,6 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
         selectedRatio={selectedRatio}
         onSelectRatio={setSelectedRatio}
         triggerRef={ratioButtonRef}
-      />
-
-      <AINotConfiguredToast
-        open={showAiWarning}
-        onClose={() => setShowAiWarning(false)}
-        onOpenSettings={onOpenSettings}
       />
 
       {toast && (

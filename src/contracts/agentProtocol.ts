@@ -117,9 +117,29 @@ export interface IAgentClient {
         apiKey: string;
         modelId: string;
       };
+      /** Explicit project/session target — prevents prompts leaking into another project. */
+      projectId?: string | null;
+      sessionId?: string | null;
+      /** Internal instruction appended to the system prompt (never shown as a chat bubble). */
+      agentContext?: string;
+      /** Stable ids so retries are idempotent on the backend. */
+      clientUserMessageId?: string;
+      clientMessageId?: string;
     },
     onUpdate?: (partialMessage: AgentMessage, toolCall?: AgentToolCall) => void
   ): Promise<AgentMessage>;
+
+  /** Bind the client to a project so every session/message request is scoped to it. */
+  setProjectId?(projectId: string | null): void;
+
+  /** Persistent listener for assistant message completion (also fires after reopening a project). */
+  onMessageComplete?(cb: (message: AgentMessage, sessionId?: string) => void): () => void;
+
+  /** Persistent listener for streaming text chunks (used to restore live output after reopen). */
+  onTextChunk?(cb: (messageId: string, chunk: string, accumulated?: string) => void): () => void;
+
+  /** Persistent listener for tool-call progress. */
+  onToolUpdate?(cb: (messageId: string, toolCall: AgentToolCall) => void): () => void;
 
   /** Abort the current ongoing thinking/tool execution */
   abort(): void;
@@ -136,11 +156,17 @@ export interface IAgentClient {
    */
   loadSessionMessages(
     sessionId: string,
-    options?: { beforeIndex?: number; limit?: number }
+    options?: { beforeIndex?: number; limit?: number; projectId?: string | null }
   ): Promise<AgentMessagePage>;
 
-  /** Create a new conversation session */
-  createSession(title?: string): Promise<AgentSession>;
+  /**
+   * Create a new conversation session. `silent` skips the welcome message so the
+   * first user prompt becomes message #1 (used by the Dashboard launch flow).
+   */
+  createSession(
+    title?: string,
+    options?: { sessionId?: string; silent?: boolean; projectId?: string | null }
+  ): Promise<AgentSession>;
 
   /** Delete a conversation session */
   deleteSession(sessionId: string): Promise<void>;

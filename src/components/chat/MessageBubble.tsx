@@ -150,6 +150,7 @@ const MessageBubbleComponent: React.FC<MessageBubbleProps> = ({
           <>
             <StreamingIndicator
               status={
+                agentStatus === 'connecting' ||
                 agentStatus === 'thinking' ||
                 agentStatus === 'executing_tool' ||
                 agentStatus === 'streaming'
