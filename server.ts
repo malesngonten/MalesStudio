@@ -2479,6 +2479,8 @@ function normalizeToolCall(raw: any): any | null {
 
 interface NormalizedAIResponse {
   summary?: string;
+  /** Deskripsi singkat apa yang sedang dikerjakan AI di ronde ini (mis. "Menulis timeline.json", "Membuat komponen Header", "Riset referensi desain"). */
+  currentStep?: string;
   toolCalls: any[];
   timeline?: any;
 }
@@ -2505,6 +2507,10 @@ function normalizeAIResponse(parsed: any): NormalizedAIResponse | null {
 
   if (typeof parsed.summary === 'string' && parsed.summary.trim()) {
     out.summary = parsed.summary.trim();
+  }
+
+  if (typeof parsed.currentStep === 'string' && parsed.currentStep.trim()) {
+    out.currentStep = parsed.currentStep.trim();
   }
 
   const push = (tc: any) => {
@@ -3827,6 +3833,10 @@ TASK MODE: ${
           ? `VIDEO_IMPLEMENTATION. User meminta video/perubahan video. Riset (web/repository) hanyalah persiapan. Jangan mengakhiri respons dengan analisis, ringkasan repository, atau rencana. WAJIB lanjut ke writeFile/editFile/modifyTimeline sampai timeline.json berisi layer & clip nyata. Timeline kosong = tugas belum selesai.`
           : `CHAT/QA. Jawab pertanyaan user secara langsung. Gunakan tool hanya jika perlu mengambil data; setelah data cukup, berikan jawaban plain text dalam bahasa Indonesia.`
       }
+OUTPUT FORMAT (WAJIB): Balas HANYA JSON dengan field:
+- "summary": string (ringkasan singkat)
+- "currentStep": string (deskripsi singkat max 60 char apa yang KAMU sedang lakukan SEKARANG, contoh: "Menulis timeline.json", "Membuat komponen Hero", "Riset warna brand", "Menerapkan animasi fade")
+- "toolCalls": array (lihat tools di atas)
 ${buildRepoContextPrompt()}
 User request:
 "${text}"`;
@@ -3958,6 +3968,14 @@ User request:
             const parsed = parseAIJson(aiRawResponse);
             if (parsed) {
               const normalized = normalizeAIResponse(parsed);
+              // Broadcast currentStep from AI so frontend can show live what AI is doing
+              if (normalized?.currentStep) {
+                broadcastSSE('agent_status', {
+                  status: 'executing_tool',
+                  round: 1,
+                  note: normalized.currentStep,
+                });
+              }
               if (normalized?.timeline) {
                 editingMode = true;
                 timelineChanges = normalized;
@@ -4253,6 +4271,7 @@ User request:
                   `- Hasil tool dari ronde sebelumnya sudah dieksekusi (total ${allToolResults.size} tool dieksekusi sejauh ini).\n` +
                   `- Gunakan SEMUA data akumulasi di bawah untuk melanjutkan tugas user.\n` +
                   `- Jika perlu modifikasi file, balas JSON toolCalls. Jika tugas sudah selesai, balas plain text bahasa Indonesia yang ringkas.\n` +
+                  `- WAJIB sertakan field "currentStep": string berisi deskripsi singkat (max 60 char) apa yang KAMU sedang lakukan di ronde ini. Contoh: "Menulis timeline.json", "Membuat komponen Hero", "Riset warna brand", "Menerapkan animasi fade".\n` +
                   (noToolYet && isVideoTask
                     ? `- Respons awal hanya berisi analisis/rencana. JANGAN mengulanginya. Langsung implementasi dengan toolCalls.\n`
                     : '') +
@@ -4369,6 +4388,15 @@ User request:
             try {
               const normalized = normalizeAIResponse(parsed);
               lastNormalized = normalized;
+
+              // Broadcast currentStep from AI for live status
+              if (normalized?.currentStep) {
+                broadcastSSE('agent_status', {
+                  status: 'executing_tool',
+                  round: currentRound,
+                  note: normalized.currentStep,
+                });
+              }
 
               if (!normalized?.toolCalls?.length) {
                 console.log(`[MULTI-TURN] Round ${currentRound} - JSON without toolCalls`);
