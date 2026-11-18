@@ -395,61 +395,43 @@ const TrashPage: React.FC<TrashPageProps> = ({
   return (
     <>
       <div className="relative z-10 min-h-screen w-full max-w-[480px] mx-auto px-4 pt-6 pb-20 overflow-y-auto" style={{ backgroundColor: '#000000' }}>
-        {/* Header */}
-        <header className="flex items-center justify-between mb-6">
-          <button
-            onClick={onBack}
-            className="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-white/5 transition-colors"
-            aria-label="Kembali"
-          >
-            <ChevronLeft className="w-5 h-5" />
-          </button>
-          <div className="flex items-center gap-2">
-            <h1 className="text-[18px] font-semibold text-white">Tong Sampah</h1>
-            {projects.length > 0 && (
-              <span className="px-2 py-0.5 rounded-full text-[11px] font-medium text-white"
-                style={{ backgroundColor: 'rgba(255,255,255,0.1)' }}>
-                {projects.length}
-              </span>
-            )}
-          </div>
-          {projects.length > 0 && !isSelectMode ? (
+        {/* Header - Normal Mode */}
+        {!isSelectMode && (
+          <header className="flex items-center justify-between mb-6">
             <button
-              type="button"
-              onClick={handleEmptyTrash}
+              onClick={onBack}
               className="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-white/5 transition-colors"
-              aria-label="Kosongkan tong sampah"
+              aria-label="Kembali"
             >
-              <Trash2 className="w-5 h-5" />
+              <ChevronLeft className="w-5 h-5" />
             </button>
-          ) : projects.length > 0 && isSelectMode ? (
             <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={toggleSelectAll}
-                className="px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors"
-                style={{ backgroundColor: 'rgba(255,255,255,0.1)', color: '#ffffff' }}
-              >
-                <X className="w-4 h-4 mr-1" />
-                {selectedIds.size === projects.length ? 'Batal' : 'Pilih semua'}
-              </button>
-              <button
-                type="button"
-                onClick={clearSelection}
-                className="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-white/5 transition-colors"
-                aria-label="Batal pilih"
-              >
-                <X className="w-5 h-5" />
-              </button>
+              <h1 className="text-[18px] font-semibold text-white">Tong Sampah</h1>
+              {projects.length > 0 && (
+                <span className="px-2 py-0.5 rounded-full text-[11px] font-medium text-white"
+                  style={{ backgroundColor: 'rgba(255,255,255,0.1)' }}>
+                  {projects.length}
+                </span>
+              )}
             </div>
-          ) : (
-            <div className="w-9 h-9" />
-          )}
-        </header>
+            {projects.length > 0 ? (
+              <button
+                type="button"
+                onClick={handleEmptyTrash}
+                className="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-white/5 transition-colors"
+                aria-label="Kosongkan tong sampah"
+              >
+                <Trash2 className="w-5 h-5" />
+              </button>
+            ) : (
+              <div className="w-9 h-9" />
+            )}
+          </header>
+        )}
 
-        {/* Select Mode Header Overlay */}
+        {/* Header - Select Mode */}
         {isSelectMode && (
-          <div className="flex items-center justify-between mb-6 px-4">
+          <header className="flex items-center justify-between mb-6 px-4">
             <button
               type="button"
               onClick={clearSelection}
@@ -470,7 +452,7 @@ const TrashPage: React.FC<TrashPageProps> = ({
               <X className="w-4 h-4 mr-1" />
               {selectedIds.size === projects.length ? 'Batal' : 'Pilih semua'}
             </button>
-          </div>
+          </header>
         )}
 
         {/* Bottom Fixed Action Bar (Select Mode) */}
