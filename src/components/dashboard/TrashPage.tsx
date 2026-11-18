@@ -26,7 +26,6 @@ const MENU_HEIGHT = 116;
 const MENU_GAP = 6;
 const VIEWPORT_MARGIN = 8;
 const LONG_PRESS_DELAY = 450;
-const ACCENT = '#e5173f';
 
 interface TrashPageProps {
   onBack: () => void;
@@ -159,7 +158,7 @@ const DropdownMenu: React.FC<DropdownMenuProps> = ({
           style={{ color: '#ffffff', background: 'transparent' }}
           role="menuitem"
         >
-          <RotateCcw className="w-4.5 h-4.5 flex-shrink-0" style={{ width: 18, height: 18, color: ACCENT }} />
+          <RotateCcw className="w-4.5 h-4.5 flex-shrink-0" style={{ width: 18, height: 18, color: '#ffffff' }} />
           <span>Pulihkan</span>
         </button>
         <div className="h-px mx-3" style={{ backgroundColor: 'rgba(255,255,255,0.07)' }} />
@@ -167,10 +166,10 @@ const DropdownMenu: React.FC<DropdownMenuProps> = ({
           type="button"
           onClick={() => { onPermanentDelete(); onClose(); }}
           className="w-full px-4 py-3 flex items-center gap-3 text-left text-[14px] font-medium transition-colors"
-          style={{ color: ACCENT, background: 'transparent' }}
+          style={{ color: '#ffffff', background: 'transparent' }}
           role="menuitem"
         >
-          <Trash2 className="flex-shrink-0" style={{ width: 18, height: 18, color: ACCENT }} />
+          <Trash2 className="flex-shrink-0" style={{ width: 18, height: 18, color: '#ffffff' }} />
           <span>Hapus permanen</span>
         </button>
       </div>
@@ -386,7 +385,17 @@ const TrashPage: React.FC<TrashPageProps> = ({
 
   const selectedItemStyle: React.CSSProperties = {
     ...itemStyle,
-    backgroundColor: 'rgba(229,23,63,0.08)',
+    backgroundColor: 'rgba(255,255,255,0.06)',
+  };
+
+  const buttonPrimary: React.CSSProperties = {
+    backgroundColor: '#ffffff',
+    color: '#000000',
+  };
+
+  const buttonSecondary: React.CSSProperties = {
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    color: '#ffffff',
   };
 
   return (
@@ -405,7 +414,7 @@ const TrashPage: React.FC<TrashPageProps> = ({
             <h1 className="text-[18px] font-semibold text-white">Tong Sampah</h1>
             {projects.length > 0 && (
               <span className="px-2 py-0.5 rounded-full text-[11px] font-medium text-white"
-                style={{ backgroundColor: `rgba(229,23,63,0.15)` }}>
+                style={{ backgroundColor: 'rgba(255,255,255,0.1)' }}>
                 {projects.length}
               </span>
             )}
@@ -424,8 +433,8 @@ const TrashPage: React.FC<TrashPageProps> = ({
               <button
                 type="button"
                 onClick={toggleSelectAll}
-                className="px-3 py-1.5 rounded-lg text-[12px] font-medium text-white transition-colors"
-                style={{ backgroundColor: ACCENT }}
+                className="px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors"
+                style={buttonSecondary}
               >
                 <Copy className="w-4 h-4 mr-1" />
                 {selectedIds.size === projects.length ? 'Batal' : 'Pilih semua'}
@@ -447,23 +456,23 @@ const TrashPage: React.FC<TrashPageProps> = ({
         {/* Selection Count + Bulk Actions */}
         {isSelectMode && selectedIds.size > 0 && (
           <div className="mb-4 p-3 rounded-xl flex items-center justify-between gap-3" style={{ backgroundColor: '#0a0a0a' }}>
-            <span className="text-[13px] font-medium text-white" style={{ color: ACCENT }}>
+            <span className="text-[13px] font-medium text-white">
               {selectedIds.size} dipilih
             </span>
             <div className="flex items-center gap-2">
               <button
                 type="button"
                 onClick={handleBulkRestore}
-                className="px-3 py-1.5 rounded-lg text-[12px] font-medium text-white transition-colors"
-                style={{ backgroundColor: '#3fbf7f' }}
+                className="px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors"
+                style={buttonPrimary}
               >
                 Pulihkan
               </button>
               <button
                 type="button"
                 onClick={handleBulkPermanentDelete}
-                className="px-3 py-1.5 rounded-lg text-[12px] font-medium text-white transition-colors"
-                style={{ backgroundColor: ACCENT }}
+                className="px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors"
+                style={buttonSecondary}
               >
                 Hapus permanen
               </button>
@@ -473,7 +482,7 @@ const TrashPage: React.FC<TrashPageProps> = ({
 
         {isLoading ? (
           <div className="flex items-center justify-center py-12">
-            <Loader2 className="w-8 h-8 animate-spin" style={{ color: ACCENT }} />
+            <Loader2 className="w-8 h-8 animate-spin" style={{ color: '#ffffff' }} />
           </div>
         ) : projects.length === 0 ? (
           <div className="py-12 text-center">
@@ -507,7 +516,7 @@ const TrashPage: React.FC<TrashPageProps> = ({
                         toggleSelectProject(project.id);
                       }}
                       className="flex-shrink-0 flex items-center justify-center p-1"
-                      style={{ color: isSelected ? ACCENT : '#71717a', background: 'transparent' }}
+                      style={{ color: isSelected ? '#ffffff' : '#71717a', background: 'transparent' }}
                       aria-label={isSelected ? 'Batal pilih' : 'Pilih'}
                       aria-pressed={isSelected}
                     >
