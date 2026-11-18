@@ -6,10 +6,9 @@ import {
   RotateCcw,
   Loader2,
   MoreVertical,
-  CheckSquare,
-  Square,
+  CheckCircle,
+  Circle,
   X,
-  Copy,
 } from 'lucide-react';
 import { projectService, Project } from '../../services/ProjectService';
 import { Toast } from '../ui/Toast';
@@ -63,8 +62,6 @@ function getDaysUntilPermanentDelete(deletedAt: number | null): number {
 
 /**
  * Dropdown menu floating di dekat tombol 3-titik.
- * Dirender lewat portal ke <body> supaya tidak terpotong overflow / stacking context halaman.
- * Menutup otomatis saat klik di luar, ESC, scroll, atau resize.
  */
 interface DropdownMenuProps {
   isOpen: boolean;
@@ -376,31 +373,28 @@ const TrashPage: React.FC<TrashPageProps> = ({
 
   const itemStyle: React.CSSProperties = {
     backgroundColor: '#0a0a0a',
-    borderRadius: '12px',
-    padding: '12px',
+    borderRadius: '16px',
+    padding: '16px',
     border: 'none',
     userSelect: 'none',
     WebkitUserSelect: 'none',
   };
 
-  const selectedItemStyle: React.CSSProperties = {
-    ...itemStyle,
-    backgroundColor: 'rgba(255,255,255,0.06)',
-  };
-
-  const buttonPrimary: React.CSSProperties = {
+  const buttonRestoreStyle: React.CSSProperties = {
     backgroundColor: '#ffffff',
     color: '#000000',
+    borderRadius: '16px',
   };
 
-  const buttonSecondary: React.CSSProperties = {
-    backgroundColor: 'rgba(255,255,255,0.1)',
+  const buttonDeleteStyle: React.CSSProperties = {
+    backgroundColor: 'rgba(255,255,255,0.08)',
     color: '#ffffff',
+    borderRadius: '16px',
   };
 
   return (
     <>
-      <div className="relative z-10 min-h-screen w-full max-w-[480px] mx-auto px-6 pt-6 pb-10 overflow-y-auto" style={{ backgroundColor: '#000000' }}>
+      <div className="relative z-10 min-h-screen w-full max-w-[480px] mx-auto px-4 pt-6 pb-20 overflow-y-auto" style={{ backgroundColor: '#000000' }}>
         {/* Header */}
         <header className="flex items-center justify-between mb-6">
           <button
@@ -434,9 +428,9 @@ const TrashPage: React.FC<TrashPageProps> = ({
                 type="button"
                 onClick={toggleSelectAll}
                 className="px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors"
-                style={buttonSecondary}
+                style={{ backgroundColor: 'rgba(255,255,255,0.1)', color: '#ffffff' }}
               >
-                <Copy className="w-4 h-4 mr-1" />
+                <X className="w-4 h-4 mr-1" />
                 {selectedIds.size === projects.length ? 'Batal' : 'Pilih semua'}
               </button>
               <button
@@ -453,30 +447,51 @@ const TrashPage: React.FC<TrashPageProps> = ({
           )}
         </header>
 
-        {/* Selection Count + Bulk Actions */}
-        {isSelectMode && selectedIds.size > 0 && (
-          <div className="mb-4 p-3 rounded-xl flex items-center justify-between gap-3" style={{ backgroundColor: '#0a0a0a' }}>
-            <span className="text-[13px] font-medium text-white">
+        {/* Select Mode Header Overlay */}
+        {isSelectMode && (
+          <div className="flex items-center justify-between mb-6 px-4">
+            <button
+              type="button"
+              onClick={clearSelection}
+              className="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-white/5 transition-colors"
+              aria-label="Tutup pilihan"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <h1 className="text-[18px] font-semibold text-white flex-1 text-center">
               {selectedIds.size} dipilih
-            </span>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={handleBulkRestore}
-                className="px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors"
-                style={buttonPrimary}
-              >
-                Pulihkan
-              </button>
-              <button
-                type="button"
-                onClick={handleBulkPermanentDelete}
-                className="px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors"
-                style={buttonSecondary}
-              >
-                Hapus permanen
-              </button>
-            </div>
+            </h1>
+            <button
+              type="button"
+              onClick={toggleSelectAll}
+              className="px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors"
+              style={{ backgroundColor: 'rgba(255,255,255,0.1)', color: '#ffffff' }}
+            >
+              <X className="w-4 h-4 mr-1" />
+              {selectedIds.size === projects.length ? 'Batal' : 'Pilih semua'}
+            </button>
+          </div>
+        )}
+
+        {/* Bottom Fixed Action Bar (Select Mode) */}
+        {isSelectMode && selectedIds.size > 0 && (
+          <div className="fixed bottom-6 left-4 right-4 flex items-center gap-3 px-4 z-50" style={{ backgroundColor: '#000000' }}>
+            <button
+              type="button"
+              onClick={handleBulkRestore}
+              className="flex-1 py-4 rounded-2xl text-center font-medium text-[16px] transition-colors"
+              style={buttonRestoreStyle}
+            >
+              Pulihkan
+            </button>
+            <button
+              type="button"
+              onClick={handleBulkPermanentDelete}
+              className="flex-1 py-4 rounded-2xl text-center font-medium text-[16px] transition-colors"
+              style={buttonDeleteStyle}
+            >
+              Hapus permanen
+            </button>
           </div>
         )}
 
@@ -489,15 +504,16 @@ const TrashPage: React.FC<TrashPageProps> = ({
             <p className="text-zinc-400 text-[15px]">Tong sampah kosong</p>
           </div>
         ) : (
-          <div className="space-y-2">
+          <div className="space-y-2 px-4 pb-24">
             {projects.map((project) => {
               const isMenuOpen = dropdownProject?.id === project.id;
               const isSelected = selectedIds.has(project.id);
+              const deletedAt = project.deletedAt || 0;
               return (
                 <div
                   key={project.id}
                   className="flex items-center gap-3"
-                  style={isSelected ? selectedItemStyle : itemStyle}
+                  style={isSelected ? { ...itemStyle, backgroundColor: 'rgba(255,255,255,0.06)' } : itemStyle}
                   onMouseDown={(e) => handleItemMouseDown(e, project.id)}
                   onMouseUp={handleItemMouseUp}
                   onMouseLeave={handleItemMouseLeave}
@@ -507,7 +523,7 @@ const TrashPage: React.FC<TrashPageProps> = ({
                   onTouchCancel={handleItemTouchCancel}
                   onClick={() => handleItemClick(project.id)}
                 >
-                  {/* Select Checkbox */}
+                  {/* Checkbox */}
                   {isSelectMode && (
                     <button
                       type="button"
@@ -515,21 +531,21 @@ const TrashPage: React.FC<TrashPageProps> = ({
                         e.stopPropagation();
                         toggleSelectProject(project.id);
                       }}
-                      className="flex-shrink-0 flex items-center justify-center p-1"
-                      style={{ color: isSelected ? '#ffffff' : '#71717a', background: 'transparent' }}
+                      className="flex-shrink-0 flex items-center justify-center"
+                      style={{ background: 'transparent', color: isSelected ? '#ffffff' : '#a1a1aa' }}
                       aria-label={isSelected ? 'Batal pilih' : 'Pilih'}
                       aria-pressed={isSelected}
                     >
                       {isSelected ? (
-                        <CheckSquare className="w-5 h-5" fill="currentColor" />
+                        <CheckCircle className="w-6 h-6" fill="currentColor" />
                       ) : (
-                        <Square className="w-5 h-5" />
+                        <Circle className="w-6 h-6" stroke="currentColor" strokeWidth={1.5} />
                       )}
                     </button>
                   )}
 
                   {/* Thumbnail */}
-                  <div className="relative flex-shrink-0 overflow-hidden rounded-xl" style={{ width: '64px', height: '64px' }}>
+                  <div className="relative flex-shrink-0 overflow-hidden rounded-xl" style={{ width: '56px', height: '56px' }}>
                     {project.thumbnail ? (
                       <img
                         src={project.thumbnail}
@@ -541,8 +557,8 @@ const TrashPage: React.FC<TrashPageProps> = ({
                         <Loader2 className="w-8 h-8 text-white/80" fill="currentColor" strokeWidth={0} />
                       </div>
                     )}
-                    <div className="absolute bottom-1 left-1 px-1.5 py-0.5 rounded text-[9px] font-medium text-white"
-                      style={{ backgroundColor: 'rgba(11,11,13,0.8)' }}>
+                    <div className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded text-[9px] font-medium text-white"
+                      style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}>
                       {project.aspectRatio}
                     </div>
                   </div>
@@ -551,7 +567,7 @@ const TrashPage: React.FC<TrashPageProps> = ({
                   <div className="flex-1 min-w-0">
                     <div className="font-medium text-white text-[15px] truncate">{project.name}</div>
                     <div className="text-[12px] mt-0.5 whitespace-nowrap truncate" style={{ color: '#71717a' }}>
-                      Dihapus {formatRelativeTime(project.deletedAt || 0)} · sisa {getDaysUntilPermanentDelete(project.deletedAt)} hari
+                      Dihapus {formatRelativeTime(deletedAt)} · sisa {getDaysUntilPermanentDelete(deletedAt)} hari
                     </div>
                   </div>
 
