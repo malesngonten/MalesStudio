@@ -8,6 +8,7 @@ import {
   MoreVertical,
   CheckSquare,
   Square,
+  X,
 } from 'lucide-react';
 import { projectService, Project } from '../../services/ProjectService';
 import { Toast } from '../ui/Toast';
@@ -23,6 +24,7 @@ const MENU_WIDTH = 176;
 const MENU_HEIGHT = 116;
 const MENU_GAP = 6;
 const VIEWPORT_MARGIN = 8;
+const LONG_PRESS_DELAY = 450;
 
 interface TrashPageProps {
   onBack: () => void;
@@ -189,6 +191,10 @@ const TrashPage: React.FC<TrashPageProps> = ({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isSelectMode, setIsSelectMode] = useState(false);
 
+  // Long press handling
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressProjectRef = useRef<string | null>(null);
+
   const closeDropdown = useCallback(() => {
     setDropdownProject(null);
     setDropdownTriggerRect(null);
@@ -220,16 +226,6 @@ const TrashPage: React.FC<TrashPageProps> = ({
       return next;
     });
   }, []);
-
-  const toggleSelectAll = useCallback(() => {
-    if (selectedIds.size === projects.length) {
-      setSelectedIds(new Set());
-      setIsSelectMode(false);
-    } else {
-      setSelectedIds(new Set(projects.map((p) => p.id)));
-      setIsSelectMode(true);
-    }
-  }, [projects, selectedIds.size]);
 
   const clearSelection = useCallback(() => {
     setSelectedIds(new Set());
@@ -266,6 +262,68 @@ const TrashPage: React.FC<TrashPageProps> = ({
       showToastMessage('Gagal menghapus permanen');
     }
   };
+
+  // Long press handlers
+  const startLongPress = useCallback((projectId: string) => {
+    if (isSelectMode) return; // Already in select mode, normal click toggles
+    longPressProjectRef.current = projectId;
+    longPressTimerRef.current = setTimeout(() => {
+      // Enter select mode and select this project
+      setIsSelectMode(true);
+      setSelectedIds(new Set([projectId]));
+      // Haptic feedback if available
+      if ('vibrate' in navigator) {
+        navigator.vibrate(10);
+      }
+    }, LONG_PRESS_DELAY);
+  }, [isSelectMode]);
+
+  const cancelLongPress = useCallback(() => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+    longPressProjectRef.current = null;
+  }, []);
+
+  const handleItemMouseDown = useCallback((e: React.MouseEvent, projectId: string) => {
+    // Only start long press on primary button (left click / touch)
+    if (e.button === 0) {
+      startLongPress(projectId);
+    }
+  }, [startLongPress]);
+
+  const handleItemMouseUp = useCallback(() => {
+    cancelLongPress();
+  }, [cancelLongPress]);
+
+  const handleItemMouseLeave = useCallback(() => {
+    cancelLongPress();
+  }, [cancelLongPress]);
+
+  const handleItemTouchStart = useCallback((e: React.TouchEvent, projectId: string) => {
+    startLongPress(projectId);
+  }, [startLongPress]);
+
+  const handleItemTouchEnd = useCallback(() => {
+    cancelLongPress();
+  }, [cancelLongPress]);
+
+  const handleItemTouchCancel = useCallback(() => {
+    cancelLongPress();
+  }, [cancelLongPress]);
+
+  const handleItemClick = useCallback((projectId: string) => {
+    if (isSelectMode) {
+      // In select mode, click toggles selection
+      toggleSelectProject(projectId);
+      // Exit select mode if no items selected
+      if (selectedIds.size === 1 && selectedIds.has(projectId)) {
+        clearSelection();
+      }
+    }
+    // If not in select mode and not long press, do nothing (or could navigate)
+  }, [isSelectMode, selectedIds, toggleSelectProject, clearSelection]);
 
   useEffect(() => {
     loadProjects();
@@ -350,24 +408,14 @@ const TrashPage: React.FC<TrashPageProps> = ({
             )}
           </div>
           {projects.length > 0 && !isSelectMode ? (
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => { toggleSelectAll(); setIsSelectMode(true); }}
-                className="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-white/5 transition-colors"
-                aria-label="Pilih semua"
-              >
-                <Square className="w-5 h-5" />
-              </button>
-              <button
-                type="button"
-                onClick={handleEmptyTrash}
-                className="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-white/5 transition-colors"
-                aria-label="Kosongkan tong sampah"
-              >
-                <Trash2 className="w-5 h-5" />
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={handleEmptyTrash}
+              className="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-white/5 transition-colors"
+              aria-label="Kosongkan tong sampah"
+            >
+              <Trash2 className="w-5 h-5" />
+            </button>
           ) : projects.length > 0 && isSelectMode ? (
             <button
               type="button"
@@ -375,15 +423,23 @@ const TrashPage: React.FC<TrashPageProps> = ({
               className="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-white/5 transition-colors"
               aria-label="Batal pilih"
             >
-              <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <line x1="18" y1="6" x2="6" y2="18" />
-                <line x1="6" y1="6" x2="18" y2="18" />
-              </svg>
+              <X className="w-5 h-5" />
             </button>
           ) : (
             <div className="w-9 h-9" />
           )}
         </header>
+
+        {/* Selection Count Badge (when in select mode) */}
+        {isSelectMode && (
+          <div className="mb-4 px-1 text-right">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[12px] font-medium text-white"
+              style={{ backgroundColor: 'rgba(229,23,63,0.15)', border: '1px solid rgba(229,23,63,0.3)' }}>
+              <Square className="w-3.5 h-3.5" style={{ color: '#e5173f' }} />
+              <span>{selectedIds.size} dipilih</span>
+            </span>
+          </div>
+        )}
 
         {/* Bulk Action Bar */}
         {isSelectMode && selectedIds.size > 0 && (
@@ -435,7 +491,20 @@ const TrashPage: React.FC<TrashPageProps> = ({
                     borderRadius: '12px',
                     padding: '12px',
                     border: isSelected ? '1px solid rgba(229,23,63,0.3)' : 'none',
+                    userSelect: 'none',
+                    WebkitUserSelect: 'none',
                   }}
+                  // Mouse events for long press
+                  onMouseDown={(e) => handleItemMouseDown(e, project.id)}
+                  onMouseUp={handleItemMouseUp}
+                  onMouseLeave={handleItemMouseLeave}
+                  onMouseOut={handleItemMouseLeave}
+                  // Touch events for long press
+                  onTouchStart={(e) => handleItemTouchStart(e, project.id)}
+                  onTouchEnd={handleItemTouchEnd}
+                  onTouchCancel={handleItemTouchCancel}
+                  // Click handler
+                  onClick={() => handleItemClick(project.id)}
                 >
                   {/* Select Checkbox */}
                   {isSelectMode && (
