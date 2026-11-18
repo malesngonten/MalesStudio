@@ -449,7 +449,6 @@ const TrashPage: React.FC<TrashPageProps> = ({
               className="px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors"
               style={{ backgroundColor: 'rgba(255,255,255,0.1)', color: '#ffffff' }}
             >
-              <X className="w-4 h-4 mr-1" />
               {selectedIds.size === projects.length ? 'Batal' : 'Pilih semua'}
             </button>
           </header>
