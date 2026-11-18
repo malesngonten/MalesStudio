@@ -538,17 +538,9 @@ export class HttpAgentAdapter implements IAgentClient {
         })
       );
 
-      // Timeout promise — mencegah pendingPromise menunggu selamanya jika backend
-      // tidak pernah mengirim message_complete (provider AI hang / SSE terputus)
-      const REQUEST_TIMEOUT_MS = 300000;
-      const timeoutPromise = new Promise<AgentMessage>((_, reject) => {
-        const timer = setTimeout(() => {
-          cleanup(); // Buang listener SSE agar tidak tertumpuk
-          reject(new Error('Permintaan ke AI melebihi batas waktu (5 menit). Server mungkin sedang sibuk atau provider AI tidak merespons.'));
-        }, REQUEST_TIMEOUT_MS);
-        // Bersihkan timer jika promise sudah settle sebelum timeout
-        pendingPromise.then(() => clearTimeout(timer)).catch(() => clearTimeout(timer));
-      });
+      // Tidak ada batas waktu — AI boleh bekerja sebentar atau lama sesuai
+      // kebutuhan tugas. pendingPromise akan settle saat backend mengirim
+      // message_complete (sukses atau gagal).
 
       // Post prompt to backend with byok config + explicit project/session ids.
       const res = await fetch('/api/agent/prompt', {
@@ -617,9 +609,8 @@ export class HttpAgentAdapter implements IAgentClient {
         };
       }
 
-      // Race antara completion dari SSE dan timeout — status akhir diikuti hasil provider,
-      // bukan hanya karena HTTP request awal sudah terkirim atau streaming sudah dimulai.
-      return await Promise.race([pendingPromise, timeoutPromise]);
+      // Tunggu completion dari SSE — status akhir diikuti hasil provider.
+      return await pendingPromise;
     } catch (err: any) {
       cleanup();
       this.status = 'idle';
@@ -627,9 +618,7 @@ export class HttpAgentAdapter implements IAgentClient {
 
       // Differentiate error types for clearer messaging
       let userMessage: string;
-      if (err?.message?.includes('melebihi batas waktu')) {
-        userMessage = '❌ ' + err.message;
-      } else if (err?.message?.includes('Failed to fetch') || err?.message?.includes('tidak dapat dijangkau')) {
+      if (err?.message?.includes('Failed to fetch') || err?.message?.includes('tidak dapat dijangkau')) {
         userMessage = '❌ Tidak dapat terhubung ke backend server. Pastikan server Males Ngonten Studio sedang berjalan.';
       } else if (err?.message?.includes('HTTP')) {
         userMessage = `❌ Gagal memproses permintaan: ${err.message}`;

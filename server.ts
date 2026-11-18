@@ -977,6 +977,7 @@ function toSessionSummary(session: any) {
 
 // Active Agent Status
 let agentStatus: 'idle' | 'connecting' | 'thinking' | 'executing_tool' | 'streaming' | 'error' = 'idle';
+let currentStepNote = '';
 let activeCancellationController: AbortController | null = null;
 let pendingPermissions: Map<string, any> = new Map();
 
@@ -1018,12 +1019,14 @@ function setAgentStatus(newStatus: typeof agentStatus) {
   agentStatus = newStatus;
   broadcastSSE('agent_status', {
     status: agentStatus,
+    note: currentStepNote || undefined,
     activeSessionId: agentStatus === 'idle' ? null : activeSessionId,
   });
   if (agentStatus !== 'idle') {
     startHeartbeat();
   } else {
     stopHeartbeat();
+    currentStepNote = '';
   }
 }
 
@@ -3102,9 +3105,6 @@ async function callAI(
         headers['Authorization'] = `Bearer ${activeByok.apiKey.trim()}`;
       }
 
-      const callController = new AbortController();
-      const callTimeout = setTimeout(() => callController.abort(), 180000);
-
       const apiRes = await fetch(targetUrl, {
         method: 'POST',
         headers,
@@ -3114,10 +3114,7 @@ async function callAI(
           temperature: 0.2,
           stream: false,
         }),
-        signal: callController.signal,
       });
-
-      clearTimeout(callTimeout);
 
       if (!apiRes.ok) {
         throw new Error(`HTTP ${apiRes.status}`);
@@ -3152,26 +3149,6 @@ async function callAI(
   return '';
 }
 
-// Helper: callAI dengan timeout (E)
-async function callAIWithTimeout(
-  messages: Array<{ role: string; content: string }>,
-  byok: { baseUrl?: string; apiKey?: string; modelId?: string } | null,
-  timeoutMs: number
-): Promise<string> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const result = await callAI(messages, byok);
-    clearTimeout(timeout);
-    return result;
-  } catch (err: any) {
-    clearTimeout(timeout);
-    if (err.name === 'AbortError') {
-      throw new Error(`AI request timeout (${timeoutMs}ms)`);
-    }
-    throw err;
-  }
-}
 
 // 6. POST /api/agent/prompt
 app.post('/api/agent/prompt', async (req, res) => {
@@ -3363,25 +3340,10 @@ app.post('/api/agent/prompt', async (req, res) => {
 
   // Run Agent Processing in background
   (async () => {
-    let isTimeout = false;
     try {
       activeCancellationController = new AbortController();
 
-      // Timeout keseluruhan pemrosesan agent — mencegah THINKING terus-menerus
-      // jika provider AI tidak merespons atau proses tengah meleset.
-      // Naikkan ke 300 detik agar respons AI panjang tidak terpotong terlalu cepat.
-      const timeoutController = new AbortController();
-      setTimeout(() => {
-        isTimeout = true;
-        timeoutController.abort();
-      }, 300000);
-      timeoutController.signal.addEventListener('abort', () => {
-        if (activeCancellationController && !activeCancellationController.signal.aborted) {
-          activeCancellationController.abort();
-        }
-      });
-
-          // Read current timeline for context (read-only, no tool call broadcast unless editing)
+      // Read current timeline for context (read-only, no tool call broadcast unless editing)
       let currentTimelineData: any;
       try {
         currentTimelineData = JSON.parse(fs.readFileSync(timelinePath, 'utf-8'));
@@ -3971,6 +3933,7 @@ User request:
               const normalized = normalizeAIResponse(parsed);
               // Broadcast currentStep from AI so frontend can show live what AI is doing
               if (normalized?.currentStep) {
+                currentStepNote = normalized.currentStep;
                 broadcastSSE('agent_status', {
                   status: 'executing_tool',
                   round: 1,
@@ -4025,11 +3988,10 @@ User request:
             // Loop selesai secara normal → respons selesai
             sawDone = true;
           } catch (err: any) {
-            // Kalau abort (user cancel / timeout), lempar ulang biar ditangani catch luar
+            // Kalau abort (user cancel), lempar ulang biar ditangani catch luar
             if (
               err?.name === 'AbortError' ||
-              err?.message?.includes('Dibatalkan') ||
-              isTimeout
+              err?.message?.includes('Dibatalkan')
             ) {
               throw err;
             }
@@ -4313,12 +4275,13 @@ User request:
             broadcastSSE('agent_status', {
               status: 'thinking',
               round: currentRound,
+              note: currentStepNote || undefined,
             });
 
             let followUpText = '';
             try {
-              // callAI dengan timeout 120 detik (E)
-              followUpText = await callAIWithTimeout(followUpMessages, byok || context?.byok || undefined, 120000);
+              // callAI tanpa batas waktu — AI boleh bekerja secepat atau seberapa lama yang dibutuhkan
+              followUpText = await callAI(followUpMessages, byok || context?.byok || undefined);
             } catch (err: any) {
               callErr = err;
               console.error(`[MULTI-TURN] Round ${currentRound} callAI gagal:`, err?.message || err);
@@ -4393,6 +4356,7 @@ User request:
 
               // Broadcast currentStep from AI for live status
               if (normalized?.currentStep) {
+                currentStepNote = normalized.currentStep;
                 broadcastSSE('agent_status', {
                   status: 'executing_tool',
                   round: currentRound,
@@ -4761,9 +4725,7 @@ User request:
       // Save transcript to chat session with updated metadata
       persistSession(currentSession);
     } catch (err: any) {
-      if (isTimeout) {
-        aiMessage.text = '⏱️ Waktu pemrosesan AI habis (timeout). Provider terlalu lama menanggapi, coba lagi atau pilih model yang lebih ringan.';
-      } else if (err?.name === 'AbortError') {
+      if (err?.name === 'AbortError') {
         aiMessage.text = '🛑 Permintaan AI dibatalkan oleh pengguna.';
       } else {
         aiMessage.text = `❌ Gagal memproses permintaan melalui AI: ${err?.message || err}`;
