@@ -4137,7 +4137,7 @@ User request:
             }
           } catch (err: any) {
             toolCall.status = 'failed';
-            toolCall.error = err?.message || String(err);
+            toolCall.error = err?.message || (typeof err === 'object' ? JSON.stringify(err) : String(err));
             broadcastSSE('tool_update', { messageId: aiMsgId, toolCall });
           }
         }
@@ -4442,7 +4442,7 @@ User request:
                 try {
                   const result = await executeTool(tc);
                   toolCall.status = result?.error ? 'failed' : 'completed';
-                  if (result?.error) toolCall.error = result.error;
+                  if (result?.error) toolCall.error = typeof result.error === 'object' ? JSON.stringify(result.error) : result.error;
                   toolCall.durationMs = 500;
                   toolCall.result = result;
                   broadcastSSE('tool_update', { messageId: aiMsgId, toolCall });
@@ -4509,9 +4509,10 @@ User request:
                   }
                 } catch (err: any) {
                   toolCall.status = 'failed';
-                  toolCall.error = err?.message || String(err);
+                  const errStr = err?.message || (typeof err === 'object' ? JSON.stringify(err) : String(err));
+                  toolCall.error = errStr;
                   broadcastSSE('tool_update', { messageId: aiMsgId, toolCall });
-                  newToolResults.push({ tool: tc.tool, path: toolTarget(tc), result: { error: err?.message || String(err) } });
+                  newToolResults.push({ tool: tc.tool, path: toolTarget(tc), result: { error: errStr } });
 
                   // Save agent task state even on error
                   try {
@@ -4728,7 +4729,7 @@ User request:
       if (err?.name === 'AbortError') {
         aiMessage.text = '🛑 Permintaan AI dibatalkan oleh pengguna.';
       } else {
-        aiMessage.text = `❌ Gagal memproses permintaan melalui AI: ${err?.message || err}`;
+        aiMessage.text = `❌ Gagal memproses permintaan melalui AI: ${err?.message || (typeof err === 'object' ? JSON.stringify(err) : String(err))}`;
       }
       aiMessage.content = aiMessage.text;
       aiMessage.status = 'failed';
