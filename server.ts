@@ -3511,7 +3511,8 @@ app.post('/api/agent/prompt', async (req, res) => {
             streamModeDecided = true;
             if (trimmed.startsWith('{')) {
               suppressStream = true;
-              broadcastSSE('agent_status', { status: 'thinking', note: 'AI sedang menyusun rencana perubahan...' });
+              // Don't broadcast generic "menyusun rencana" if AI already provided currentStep
+              // currentStep is broadcast separately when parsing AI response
             }
           }
         }
@@ -4306,11 +4307,12 @@ User request:
             ];
 
             // Broadcast agent status with round info (E)
+            // Note: currentStep from AI response will be broadcast when response is parsed,
+            // which is more informative than generic "Menganalisis hasil"
             setAgentStatus('thinking');
             broadcastSSE('agent_status', {
               status: 'thinking',
               round: currentRound,
-              note: `Menganalisis hasil (ronde ${currentRound})`
             });
 
             let followUpText = '';
