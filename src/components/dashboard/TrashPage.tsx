@@ -6,6 +6,8 @@ import {
   RotateCcw,
   Loader2,
   MoreVertical,
+  CheckSquare,
+  Square,
 } from 'lucide-react';
 import { projectService, Project } from '../../services/ProjectService';
 import { Toast } from '../ui/Toast';
@@ -184,6 +186,8 @@ const TrashPage: React.FC<TrashPageProps> = ({
   const [toast, setToast] = useState<{ message: string; action?: { label: string; onClick: () => void } } | null>(null);
   const [dropdownProject, setDropdownProject] = useState<Project | null>(null);
   const [dropdownTriggerRect, setDropdownTriggerRect] = useState<DOMRect | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [isSelectMode, setIsSelectMode] = useState(false);
 
   const closeDropdown = useCallback(() => {
     setDropdownProject(null);
@@ -200,7 +204,68 @@ const TrashPage: React.FC<TrashPageProps> = ({
     } finally {
       setIsLoading(false);
     }
+    // Clear selection when list reloads
+    setSelectedIds(new Set());
+    setIsSelectMode(false);
   }, []);
+
+  const toggleSelectProject = useCallback((projectId: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(projectId)) {
+        next.delete(projectId);
+      } else {
+        next.add(projectId);
+      }
+      return next;
+    });
+  }, []);
+
+  const toggleSelectAll = useCallback(() => {
+    if (selectedIds.size === projects.length) {
+      setSelectedIds(new Set());
+      setIsSelectMode(false);
+    } else {
+      setSelectedIds(new Set(projects.map((p) => p.id)));
+      setIsSelectMode(true);
+    }
+  }, [projects, selectedIds.size]);
+
+  const clearSelection = useCallback(() => {
+    setSelectedIds(new Set());
+    setIsSelectMode(false);
+  }, []);
+
+  const handleBulkRestore = async () => {
+    if (selectedIds.size === 0) return;
+    try {
+      for (const id of selectedIds) {
+        await projectService.restoreProject(id);
+      }
+      showToastMessage(`${selectedIds.size} project dipulihkan`);
+      clearSelection();
+      loadProjects();
+    } catch (e) {
+      console.error('Failed to bulk restore:', e);
+      showToastMessage('Gagal memulihkan project');
+    }
+  };
+
+  const handleBulkPermanentDelete = async () => {
+    if (selectedIds.size === 0) return;
+    if (!window.confirm(`Hapus ${selectedIds.size} project permanen? Tindakan ini tidak bisa dibatalkan.`)) return;
+    try {
+      for (const id of selectedIds) {
+        await projectService.permanentlyDeleteProject(id);
+      }
+      showToastMessage(`${selectedIds.size} project dihapus permanen`);
+      clearSelection();
+      loadProjects();
+    } catch (e) {
+      console.error('Failed to bulk delete:', e);
+      showToastMessage('Gagal menghapus permanen');
+    }
+  };
 
   useEffect(() => {
     loadProjects();
@@ -284,19 +349,69 @@ const TrashPage: React.FC<TrashPageProps> = ({
               </span>
             )}
           </div>
-          {projects.length > 0 ? (
+          {projects.length > 0 && !isSelectMode ? (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => { toggleSelectAll(); setIsSelectMode(true); }}
+                className="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-white/5 transition-colors"
+                aria-label="Pilih semua"
+              >
+                <Square className="w-5 h-5" />
+              </button>
+              <button
+                type="button"
+                onClick={handleEmptyTrash}
+                className="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-white/5 transition-colors"
+                aria-label="Kosongkan tong sampah"
+              >
+                <Trash2 className="w-5 h-5" />
+              </button>
+            </div>
+          ) : projects.length > 0 && isSelectMode ? (
             <button
               type="button"
-              onClick={handleEmptyTrash}
+              onClick={clearSelection}
               className="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-white/5 transition-colors"
-              aria-label="Kosongkan tong sampah"
+              aria-label="Batal pilih"
             >
-              <Trash2 className="w-5 h-5" />
+              <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
             </button>
           ) : (
             <div className="w-9 h-9" />
           )}
         </header>
+
+        {/* Bulk Action Bar */}
+        {isSelectMode && selectedIds.size > 0 && (
+          <div className="mb-4 p-3 rounded-xl flex items-center justify-between gap-3"
+            style={{ backgroundColor: 'rgba(229,23,63,0.12)', border: '1px solid rgba(229,23,63,0.3)' }}>
+            <span className="text-[13px] font-medium text-white">
+              {selectedIds.size} dipilih
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleBulkRestore}
+                className="px-3 py-1.5 rounded-lg text-[12px] font-medium text-white transition-colors"
+                style={{ backgroundColor: '#3fbf7f' }}
+              >
+                Pulihkan
+              </button>
+              <button
+                type="button"
+                onClick={handleBulkPermanentDelete}
+                className="px-3 py-1.5 rounded-lg text-[12px] font-medium text-white transition-colors"
+                style={{ backgroundColor: '#e5173f' }}
+              >
+                Hapus permanen
+              </button>
+            </div>
+          </div>
+        )}
 
         {isLoading ? (
           <div className="flex items-center justify-center py-12">
@@ -310,12 +425,39 @@ const TrashPage: React.FC<TrashPageProps> = ({
           <div className="space-y-3">
             {projects.map((project) => {
               const isMenuOpen = dropdownProject?.id === project.id;
+              const isSelected = selectedIds.has(project.id);
               return (
                 <div
                   key={project.id}
                   className="flex items-center gap-3"
-                  style={{ backgroundColor: 'rgba(255,255,255,0.04)', borderRadius: '12px', padding: '12px' }}
+                  style={{
+                    backgroundColor: isSelected ? 'rgba(229,23,63,0.1)' : 'rgba(255,255,255,0.04)',
+                    borderRadius: '12px',
+                    padding: '12px',
+                    border: isSelected ? '1px solid rgba(229,23,63,0.3)' : 'none',
+                  }}
                 >
+                  {/* Select Checkbox */}
+                  {isSelectMode && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleSelectProject(project.id);
+                      }}
+                      className="flex-shrink-0 flex items-center justify-center p-1"
+                      style={{ color: isSelected ? '#e5173f' : '#71717a' }}
+                      aria-label={isSelected ? 'Batal pilih' : 'Pilih'}
+                      aria-pressed={isSelected}
+                    >
+                      {isSelected ? (
+                        <CheckSquare className="w-5 h-5" fill="currentColor" />
+                      ) : (
+                        <Square className="w-5 h-5" />
+                      )}
+                    </button>
+                  )}
+
                   {/* Thumbnail */}
                   <div className="relative flex-shrink-0 overflow-hidden rounded-xl" style={{ width: '64px', height: '64px' }}>
                     {project.thumbnail ? (
@@ -344,34 +486,36 @@ const TrashPage: React.FC<TrashPageProps> = ({
                     </div>
                   </div>
 
-                  {/* Action button - 3 dot dropdown */}
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (isMenuOpen) {
-                        closeDropdown();
-                        return;
-                      }
-                      setDropdownTriggerRect(e.currentTarget.getBoundingClientRect());
-                      setDropdownProject(project);
-                    }}
-                    className="rounded-xl transition-colors flex-shrink-0 flex items-center justify-center"
-                    style={{
-                      minWidth: '40px',
-                      minHeight: '40px',
-                      color: isMenuOpen ? '#ffffff' : '#a1a1aa',
-                      backgroundColor: isMenuOpen ? 'rgba(255,255,255,0.08)' : 'transparent',
-                    }}
-                    aria-label={`Menu aksi untuk ${project.name}`}
-                    aria-expanded={isMenuOpen}
-                    aria-haspopup="menu"
-                  >
-                    <MoreVertical className="w-5 h-5" />
-                  </button>
+                  {/* Action button - 3 dot dropdown (hidden in select mode) */}
+                  {!isSelectMode && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (isMenuOpen) {
+                          closeDropdown();
+                          return;
+                        }
+                        setDropdownTriggerRect(e.currentTarget.getBoundingClientRect());
+                        setDropdownProject(project);
+                      }}
+                      className="rounded-xl transition-colors flex-shrink-0 flex items-center justify-center"
+                      style={{
+                        minWidth: '40px',
+                        minHeight: '40px',
+                        color: isMenuOpen ? '#ffffff' : '#a1a1aa',
+                        backgroundColor: isMenuOpen ? 'rgba(255,255,255,0.08)' : 'transparent',
+                      }}
+                      aria-label={`Menu aksi untuk ${project.name}`}
+                      aria-expanded={isMenuOpen}
+                      aria-haspopup="menu"
+                    >
+                      <MoreVertical className="w-5 h-5" />
+                    </button>
+                  )}
 
                   {/* Dropdown Menu */}
-                  {isMenuOpen && (
+                  {!isSelectMode && isMenuOpen && (
                     <DropdownMenu
                       isOpen
                       onClose={closeDropdown}
