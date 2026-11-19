@@ -12,7 +12,6 @@ import { StoryboardView } from './components/storyboard/StoryboardView';
 import { CodeEditorPanel } from './components/code/CodeEditorPanel';
 import { AssetTab } from './components/assets/AssetTab';
 import { RenderTab } from './components/render/RenderTab';
-import { AgentDiscoveryDrawer } from './components/agent/AgentDiscoveryDrawer';
 import { ChatHistorySheet } from './components/history/ChatHistorySheet';
 import { BottomSheet } from './components/ui/BottomSheet';
 import { ProjectAsset, TimelineClip, TimelineLayer } from './types';
@@ -375,7 +374,6 @@ export default function App() {
 
   // Modals / Drawers
   const [isRenderOpen, setIsRenderOpen] = useState(false);
-  const [isAgentDrawerOpen, setIsAgentDrawerOpen] = useState(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isAiSettingsOpen, setIsAiSettingsOpen] = useState(false);
@@ -1017,7 +1015,6 @@ export default function App() {
     setIsStoryboardSheetOpen(false);
     setIsElementSheetOpen(false);
     setIsRenderOpen(false);
-    setIsAgentDrawerOpen(false);
     setIsHistoryOpen(false);
     setIsSettingsOpen(false);
     setIsAiSettingsOpen(false);
@@ -1061,11 +1058,6 @@ export default function App() {
   const openSettings = useCallback(() => {
     closeAllPanels();
     setIsSettingsOpen(true);
-  }, [closeAllPanels]);
-
-  const openAgentDrawer = useCallback(() => {
-    closeAllPanels();
-    setIsAgentDrawerOpen(true);
   }, [closeAllPanels]);
 
   const openRender = useCallback(() => {
@@ -1194,7 +1186,6 @@ export default function App() {
         projectName={activeProject?.name}
         onBackToDashboard={handleReturnToDashboard}
         onOpenSettings={openSettings}
-        onOpenAgent={openAgentDrawer}
       />
 
       {/* 2. SPLIT LAYOUT: Remotion Player (atas) | Divider (drag) | AI Chat (bawah) */}
@@ -1392,12 +1383,6 @@ export default function App() {
         onSearchSessions={handleSearchSessions}
       />
 
-      {/* Agent Discovery & ARM64 Diagnostics Drawer */}
-      <AgentDiscoveryDrawer
-        isOpen={isAgentDrawerOpen}
-        onClose={() => setIsAgentDrawerOpen(false)}
-      />
-
       {/* Render & Export Video Modal */}
       <BottomSheet
         isOpen={isRenderOpen}
@@ -1527,7 +1512,6 @@ export default function App() {
           setIsTimelineVisible(false);
           setIsChatSheetOpen(false);
           setIsRenderOpen(false);
-          setIsAgentDrawerOpen(false);
           setIsHistoryOpen(false);
           setIsAiSettingsOpen(false);
           if (activeProjectId) {
