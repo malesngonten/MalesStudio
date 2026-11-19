@@ -979,7 +979,13 @@ function toSessionSummary(session: any) {
 let agentStatus: 'idle' | 'connecting' | 'thinking' | 'executing_tool' | 'streaming' | 'error' = 'idle';
 let currentStepNote = '';
 let activeCancellationController: AbortController | null = null;
+let opencodeServiceReady = false;
+let opencodeActiveSessionId: string | null = null;
 let pendingPermissions: Map<string, any> = new Map();
+
+// Tidak ada konstanta deskripsi tool di backend — currentStep harus
+// datang langsung dari AI response JSON. Jika AI tidak menyertakan
+// currentStep, tidak ada deskripsi langkah yang ditampilkan ke user.
 
 // Heartbeat for SSE (E: kirim heartbeat tiap 15 detik selama agentStatus bukan idle)
 let heartbeatInterval: NodeJS.Timeout | null = null;
@@ -1226,6 +1232,23 @@ function discoverLocalAgents() {
   const geminiCheck = checkBinary('gemini');
   const ollamaCheck = checkBinary('ollama');
 
+  // Check OpenCode CLI and service
+  const opencodeCheck = checkBinary('opencode');
+  try {
+    const ocInfo = spawnSync('opencode', ['api', 'get', '/api/info'], {
+      encoding: 'utf-8',
+      timeout: 3000,
+    });
+    if (ocInfo.status === 0 && ocInfo.stdout) {
+      try {
+        const parsed = JSON.parse(ocInfo.stdout);
+        if (parsed && parsed.version) {
+          opencodeServiceReady = true;
+        }
+      } catch {}
+    }
+  } catch {}
+
   // Check Ollama HTTP if binary not in PATH
   let ollamaHttpReady = false;
   try {
@@ -1285,6 +1308,18 @@ function discoverLocalAgents() {
       supportedTools: ['readFile', 'writeFile'],
       latencyMs: ollamaHttpReady ? 120 : undefined,
       isSelected: selectedAgentId === 'agent-ollama',
+    },
+    {
+      id: 'agent-opencode',
+      name: 'OpenCode Agent',
+      command: 'opencode api',
+      protocol: 'http',
+      version: opencodeCheck.version || '2.2.2',
+      status: opencodeServiceReady ? 'ready' : 'not_found',
+      description: 'OpenCode autonomous coding agent with full file system, terminal, web search, and multi-turn reasoning. Ideal for complex video production tasks.',
+      supportedTools: ['readFile', 'writeFile', 'editFile', 'deleteFile', 'listDirectory', 'runBashCommand', 'webSearch', 'webRead'],
+      latencyMs: 45,
+      isSelected: selectedAgentId === 'agent-opencode',
     },
   ];
 
@@ -2804,6 +2839,11 @@ app.post('/api/agent/cancel', (req, res) => {
     activeCancellationController.abort();
     activeCancellationController = null;
   }
+  // Also interrupt OpenCode if it's the active agent
+  if (selectedAgentId === 'agent-opencode' && opencodeActiveSessionId) {
+    opencodeInterrupt(opencodeActiveSessionId).catch(() => {});
+    opencodeActiveSessionId = null;
+  }
   setAgentStatus('idle');
   broadcastSSE('agent_cancelled', { message: 'Perintah agent dibatalkan oleh pengguna.' });
   res.json({ success: true, message: 'Agent cancelled' });
@@ -3150,6 +3190,231 @@ async function callAI(
 }
 
 
+// ========================================================================
+// OpenCode Agent Integration
+// Delegates to the local OpenCode service via `opencode api` CLI when
+// selectedAgentId === 'agent-opencode'. The built-in agent path is unchanged.
+// ========================================================================
+
+const OPENCODE_BASE = 'http://127.0.0.1:49374';
+const OPENCODE_SESSIONS = new Map(); // malesStudioProjectId -> opencodeSessionId
+
+function opencodeApi(method: string, path: string, body?: any): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const args = ['api', method, path];
+    if (body) {
+      args.push('--data', JSON.stringify(body));
+    }
+    const child = spawn('opencode', args, {
+      timeout: 120000,
+    });
+    let stdout = '';
+    let stderr = '';
+    if (child.stdout) {
+      child.stdout.on('data', (d) => (stdout += d.toString()));
+    }
+    if (child.stderr) {
+      child.stderr.on('data', (d) => (stderr += d.toString()));
+    }
+    child.on('close', (code) => {
+      if (code === 0) {
+        try {
+          resolve(stdout ? JSON.parse(stdout) : null);
+        } catch {
+          resolve(stdout);
+        }
+      } else {
+        reject(new Error(stderr || `opencode api exited with code ${code}`));
+      }
+    });
+    child.on('error', (err) => reject(err));
+  });
+}
+
+async function opencodeEnsureSessionForProject(
+  projectId: string,
+  projectDir: string,
+): Promise<string> {
+  const existing = OPENCODE_SESSIONS.get(projectId);
+  if (existing) return existing;
+
+  // Check for existing OpenCode sessions in this project directory
+  try {
+    const sessions = await opencodeApi('get', '/api/session');
+    const sessArray = Array.isArray(sessions) ? sessions : (sessions?.data || []);
+    const found = sessArray.find(
+      (s: any) => s.projectID === projectId || s.location?.directory === projectDir,
+    );
+    if (found?.id) {
+      OPENCODE_SESSIONS.set(projectId, found.id);
+      return found.id;
+    }
+  } catch {}
+
+  // Create a new session scoped to this project
+  try {
+    const created = await opencodeApi('post', '/api/session', {
+      projectID: projectId,
+      title: `MalesStudio: ${projectId}`,
+      location: { directory: projectDir },
+    });
+    const sessionId = created?.data?.id || created?.id;
+    if (sessionId) {
+      OPENCODE_SESSIONS.set(projectId, sessionId);
+      return sessionId;
+    }
+  } catch (e) {
+    console.error('[OpenCode] Failed to create session:', e?.message || e);
+  }
+  throw new Error('OpenCode session tidak dapat dibuat');
+}
+
+async function opencodeSendPrompt(
+  sessionId: string,
+  text: string,
+): Promise<{ messageId: string; content: string }> {
+  const created = await opencodeApi('post', `/api/session/${sessionId}/prompt`, {
+    text,
+  });
+  const userMsg = created?.data;
+  return {
+    messageId: userMsg?.id || `msg-oc-${Date.now()}`,
+    content: text,
+  };
+}
+
+async function opencodeGetMessages(sessionId: string): Promise<any[]> {
+  const data = await opencodeApi('get', `/api/session/${sessionId}/message`);
+  const arr = Array.isArray(data) ? data : data?.data || [];
+  return arr;
+}
+
+async function opencodeInterrupt(sessionId: string): Promise<void> {
+  await opencodeApi('post', `/api/session/${sessionId}/interrupt`, {}).catch(() => {});
+}
+
+/**
+ * Subscribe to OpenCode event stream and map events to callbacks.
+ * Filters events by sessionId. Runs until controller is aborted.
+ */
+function opencodeStreamEvents(
+  sessionId: string,
+  callbacks: {
+    onTextChunk?: (chunk: string, accumulated: string) => void;
+    onToolStart?: (toolName: string, input: any) => void;
+    onToolComplete?: (toolName: string, result: any) => void;
+    onToolError?: (toolName: string, error: string) => void;
+    onExecutionComplete?: (outcome: string) => void;
+    onExecutionError?: (err: any) => void;
+  },
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('opencode', ['api', 'get', '/api/event'], {
+      timeout: 0, // no timeout — long-running stream
+    });
+
+    let buffer = '';
+    let pendingText = ''; // accumulated text for current message
+    let activeTool: { name: string; input: any } | null = null;
+
+    const handleEvent = (eventType: string, dataStr: string) => {
+      try {
+        const data = dataStr ? JSON.parse(dataStr) : {};
+        // Filter by session ID if present in event
+        const eventSessionId =
+          data?.sessionID || data?.session?.id || data?.id || data?.sessionId;
+        if (eventSessionId && eventSessionId !== sessionId) return;
+
+        switch (eventType) {
+          case 'session.text.started':
+            pendingText = '';
+            callbacks.onTextChunk?.('', '');
+            break;
+          case 'session.text.delta':
+            if (data?.delta) {
+              pendingText += data.delta;
+              callbacks.onTextChunk?.(data.delta, pendingText);
+            }
+            break;
+          case 'session.text.ended':
+            callbacks.onTextChunk?.('', pendingText);
+            break;
+          case 'session.tool.called':
+            activeTool = { name: data?.tool?.name || 'unknown', input: data?.tool?.input };
+            callbacks.onToolStart?.(activeTool.name, activeTool.input);
+            break;
+          case 'session.tool.success':
+            if (activeTool) {
+              callbacks.onToolComplete?.(activeTool.name, data?.tool?.output || null);
+              activeTool = null;
+            }
+            break;
+          case 'session.tool.failed':
+            if (activeTool) {
+              callbacks.onToolError?.(activeTool.name, data?.tool?.error?.message || 'tool failed');
+              activeTool = null;
+            }
+            break;
+          case 'session.execution.succeeded':
+            callbacks.onExecutionComplete?.('succeeded');
+            break;
+          case 'session.execution.failed':
+            callbacks.onExecutionError?.(new Error(data?.error?.message || 'execution failed'));
+            break;
+          case 'session.execution.interrupted':
+            callbacks.onExecutionError?.(new Error('execution interrupted'));
+            break;
+        }
+      } catch {
+        // ignore parse errors on individual events
+      }
+    };
+
+    if (child.stdout) {
+      child.stdout.on('data', (d) => {
+        buffer += d.toString();
+        // Parse SSE: events are separated by blank lines
+        const parts = buffer.split('\n\n');
+        buffer = parts.pop() || '';
+        for (const part of parts) {
+          const lines = part.split('\n');
+          let evtType = '';
+          let dataStr = '';
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (trimmed.startsWith('event:')) {
+              evtType = trimmed.slice(6).trim();
+            } else if (trimmed.startsWith('data:')) {
+              dataStr = trimmed.slice(5).trim();
+            }
+          }
+          if (dataStr) {
+            handleEvent(evtType || 'message', dataStr);
+          }
+        }
+      });
+    }
+
+    if (child.stderr) {
+      child.stderr.on('data', () => {
+        // ignore stderr noise
+      });
+    }
+
+    child.on('close', (code) => {
+      if (code !== 0 && code !== null) {
+        reject(new Error(`OpenCode event stream exited with code ${code}`));
+      } else {
+        resolve();
+      }
+    });
+
+    child.on('error', (err) => {
+      reject(err);
+    });
+  });
+}
+
 // 6. POST /api/agent/prompt
 app.post('/api/agent/prompt', async (req, res) => {
   const {
@@ -3182,6 +3447,219 @@ app.post('/api/agent/prompt', async (req, res) => {
 
   if (!text && (!attachments || attachments.length === 0)) {
     return res.status(400).json({ error: 'Text or attachment is required' });
+  }
+
+  // ========================================================================
+  // OpenCode Agent Path — delegate to local OpenCode service
+  // ========================================================================
+  if (selectedAgentId === 'agent-opencode') {
+    if (!opencodeServiceReady) {
+      return res.status(503).json({
+        error: 'OpenCode service tidak tersedia. Pastikan opencode CLI dan service sedang berjalan.',
+      });
+    }
+    try {
+      const targetProjectId = projectId || path.basename(ACTIVE_PROJECT_DIR);
+      const targetProjectDir = projectDirFor(targetProjectId);
+      const ocSessionId = await opencodeEnsureSessionForProject(
+        targetProjectId,
+        targetProjectDir,
+      );
+      opencodeActiveSessionId = ocSessionId;
+
+      const userMsgId =
+        (typeof clientUserMessageId === 'string' && clientUserMessageId) ||
+        `msg-usr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const aiMsgId =
+        (typeof clientMessageId === 'string' && clientMessageId) ||
+        `msg-ai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+      // Persist a placeholder user + assistant message so history is preserved
+      const nowIso = new Date().toISOString();
+      let currentSession =
+        chatSessions.find((s) => s.id === sessionId) ||
+        chatSessions.find((s) => s.id === activeSessionId) ||
+        chatSessions[0];
+      if (!currentSession) {
+        currentSession = {
+          id: sessionId || `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          title: 'Sesi Video Baru',
+          createdAt: nowIso,
+          updatedAt: nowIso,
+          messages: [],
+          isPinned: false,
+          isArchived: false,
+          isDeleted: false,
+          tags: [],
+        };
+        chatSessions.unshift(currentSession);
+      }
+      activeSessionId = currentSession.id;
+
+      const userMessage = {
+        id: userMsgId,
+        clientId: userMsgId,
+        role: 'user',
+        content: text || 'Menambahkan lampiran file',
+        timestamp: new Date().toLocaleTimeString('id-ID', {
+          hour: '2-digit',
+          minute: '2-digit',
+        }),
+        context,
+        attachments,
+      };
+      currentSession.messages.push(userMessage);
+
+      const aiMessage: any = {
+        id: aiMsgId,
+        role: 'assistant',
+        content: '',
+        text: '',
+        timestamp: new Date().toLocaleTimeString('id-ID', {
+          hour: '2-digit',
+          minute: '2-digit',
+        }),
+        status: 'streaming',
+        toolCalls: [],
+        _opencodeSessionId: ocSessionId,
+        _opencodeProjectId: targetProjectId,
+      };
+      currentSession.messages.push(aiMessage);
+      persistSession(currentSession);
+
+      // Send prompt to OpenCode in background
+      setAgentStatus('thinking');
+      broadcastSSE('agent_status', {
+        status: 'thinking',
+        note: '',
+        activeSessionId: currentSession.id,
+      });
+
+      (async () => {
+        try {
+          await opencodeSendPrompt(ocSessionId, text);
+          setAgentStatus('streaming');
+          broadcastSSE('agent_status', {
+            status: 'streaming',
+            note: '',
+            activeSessionId: currentSession.id,
+          });
+
+          // Connect to OpenCode event stream for real-time updates
+          await opencodeStreamEvents(ocSessionId, {
+            onTextChunk: (chunk, accumulated) => {
+              aiMessage.content = accumulated || '';
+              aiMessage.text = accumulated || '';
+              broadcastSSE('text_chunk', {
+                messageId: aiMsgId,
+                sessionId: currentSession.id,
+                chunk,
+                accumulated: accumulated || '',
+              });
+            },
+            onToolStart: (toolName, input) => {
+              currentStepNote = '';
+              broadcastSSE('tool_update', {
+                messageId: aiMsgId,
+                toolCall: {
+                  id: `tc-oc-${Date.now()}`,
+                  toolName,
+                  description: '',
+                  arguments: input || {},
+                  status: 'running',
+                  timestamp: new Date().toISOString(),
+                },
+              });
+              broadcastSSE('agent_status', {
+                status: 'executing_tool',
+                note: '',
+                activeSessionId: currentSession.id,
+              });
+            },
+            onToolComplete: (toolName, result) => {
+              currentStepNote = '';
+              broadcastSSE('tool_update', {
+                messageId: aiMsgId,
+                toolCall: {
+                  id: `tc-oc-${Date.now()}`,
+                  toolName,
+                  description: '',
+                  arguments: {},
+                  status: 'completed',
+                  result: typeof result === 'string' ? result : JSON.stringify(result),
+                  timestamp: new Date().toISOString(),
+                },
+              });
+            },
+            onToolError: (toolName, error) => {
+              currentStepNote = '';
+              broadcastSSE('tool_update', {
+                messageId: aiMsgId,
+                toolCall: {
+                  id: `tc-oc-${Date.now()}`,
+                  toolName,
+                  description: '',
+                  arguments: {},
+                  status: 'failed',
+                  result: error,
+                  timestamp: new Date().toISOString(),
+                },
+              });
+            },
+            onExecutionComplete: (outcome) => {
+              aiMessage.status = outcome === 'succeeded' ? 'completed' : 'failed';
+              aiMessage.content = aiMessage.content || '';
+              aiMessage.text = aiMessage.text || '';
+              broadcastSSE('message_complete', {
+                messageId: aiMsgId,
+                sessionId: currentSession.id,
+                message: aiMessage,
+              });
+              setAgentStatus('idle');
+              currentStepNote = '';
+              opencodeActiveSessionId = null;
+              persistSession(currentSession);
+            },
+            onExecutionError: (err) => {
+              aiMessage.status = 'error';
+              aiMessage.content = err?.message || 'OpenCode error';
+              aiMessage.text = aiMessage.content;
+              broadcastSSE('message_complete', {
+                messageId: aiMsgId,
+                sessionId: currentSession.id,
+                message: aiMessage,
+              });
+              setAgentStatus('error');
+              currentStepNote = '';
+              opencodeActiveSessionId = null;
+              persistSession(currentSession);
+            },
+          });
+        } catch (err: any) {
+          aiMessage.status = 'error';
+          aiMessage.content = err?.message || 'OpenCode gagal memproses permintaan.';
+          aiMessage.text = aiMessage.content;
+          broadcastSSE('message_complete', {
+            messageId: aiMsgId,
+            sessionId: currentSession.id,
+            message: aiMessage,
+          });
+          setAgentStatus('idle');
+          currentStepNote = '';
+          persistSession(currentSession);
+        }
+      })();
+
+      return res.json({
+        success: true,
+        messageId: aiMsgId,
+        sessionId: currentSession.id,
+      });
+    } catch (err: any) {
+      return res.status(500).json({
+        error: err?.message || 'OpenCode gagal memproses permintaan.',
+      });
+    }
   }
 
   // Resolve the exact session requested by the client. A provided-but-missing
@@ -4394,6 +4872,9 @@ User request:
 
               console.log(`[MULTI-TURN] Round ${currentRound} - ${normalized.toolCalls.length} toolCalls: ${normalized.toolCalls.map((tc: any) => tc.tool + '(' + toolTarget(tc) + ')').join(', ')}`);
 
+              // currentStep harus datang langsung dari AI response, bukan placeholder default backend
+              const aiCurrentStep = normalized?.currentStep || '';
+
               // Execute toolCalls, deduplicating (D: hanya read-only yang dedupe)
               const newToolResults: Array<{ tool: string; path: string; result: any }> = [];
               for (const tc of normalized.toolCalls) {
@@ -4427,10 +4908,14 @@ User request:
                   }
                 }
 
+                // currentStep harus datang langsung dari AI. Jika AI tidak menyertakan,
+                // tidak ada deskripsi langkah yang ditampilkan.
+                const stepDesc = aiCurrentStep || '';
+
                 const toolCall: any = {
                   id: 'tc-mt-' + currentRound + '-' + tc.tool + '-' + Date.now(),
                   toolName: tc.tool,
-                  description: `Eksekusi ronde ${currentRound} ${tc.tool}`,
+                  description: stepDesc,
                   arguments: tc,
                   target: toolTarget(tc),
                   status: 'running',

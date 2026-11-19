@@ -102,6 +102,8 @@ export function useStudioState() {
     return () => clearTimeout(timer);
   }, [toast]);
   const [activeToolCalls, setActiveToolCalls] = useState<AgentToolCall[]>([]);
+  /** Langkah saat ini yang sedang dikerjakan agent (mis. "Menginstal rough.js..."). Ditampilkan di loading indicator. */
+  const [currentAgentStep, setCurrentAgentStep] = useState<string>('');
   const [assets, setAssets] = useState<ProjectAsset[]>(DEFAULT_ASSETS);
 
   // BYOK OpenAI-Compatible Configuration
@@ -349,6 +351,9 @@ export function useStudioState() {
         ...prev.filter((t) => t.id !== toolCall.id),
         toolCall,
       ]);
+      if (toolCall.status === 'running' && toolCall.description) {
+        setCurrentAgentStep(toolCall.description);
+      }
     });
 
     const unsubComplete = studioAgentClient.onMessageComplete?.((message, _sessionId) => {
@@ -612,6 +617,7 @@ export function useStudioState() {
 
       setAgentStatus('connecting');
       setActiveToolCalls([]);
+      setCurrentAgentStep('');
       streamingMsgRef.current = null;
       cancelPendingStream();
 
@@ -1282,6 +1288,8 @@ export function useStudioState() {
     isLoadingOlderMessages,
     handleLoadOlderMessages,
     activeToolCalls,
+    currentAgentStep,
+    setCurrentAgentStep,
     assets,
     setAssets,
     toast,

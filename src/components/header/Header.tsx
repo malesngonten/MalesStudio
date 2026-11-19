@@ -1,5 +1,5 @@
 import React from 'react';
-import { Film, Folder, ArrowLeft, Settings } from 'lucide-react';
+import { Film, Folder, ArrowLeft, Settings, Bot } from 'lucide-react';
 
 export type StudioView = 'studio' | 'storyboard' | 'code' | 'assets';
 
@@ -9,6 +9,7 @@ interface HeaderProps {
   projectName?: string;
   onBackToDashboard?: () => void;
   onOpenSettings?: () => void;
+  onOpenAgent?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -17,6 +18,7 @@ export const Header: React.FC<HeaderProps> = ({
   projectName,
   onBackToDashboard,
   onOpenSettings,
+  onOpenAgent,
 }) => {
   return (
     <header className="h-14 bg-[#0a0a0c] px-3 sm:px-4 flex items-center justify-between shrink-0 z-30 border-b border-white/5 relative">
@@ -56,6 +58,17 @@ export const Header: React.FC<HeaderProps> = ({
             aria-label="Pengaturan"
           >
             <Settings className="w-4 h-4" />
+          </button>
+        )}
+        {onOpenAgent && (
+          <button
+            type="button"
+            onClick={onOpenAgent}
+            className="tap w-8 h-8 rounded-full bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white flex items-center justify-center transition-colors"
+            title="Agent AI"
+            aria-label="Agent AI"
+          >
+            <Bot className="w-4 h-4" />
           </button>
         )}
         <button type="button" className="tap w-8 h-8 rounded-full bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white flex items-center justify-center transition-colors" title="Folder">

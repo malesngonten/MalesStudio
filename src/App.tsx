@@ -200,6 +200,7 @@ export default function App() {
     handleChangeAspectRatio: studioHandleChangeAspectRatio,
     handleInsertTimelineClip,
     agentStatusDetail,
+    currentAgentStep,
   } = useStudioState();
 
   // Wrapper that also persists project metadata (width, height, aspectRatio)
@@ -1062,6 +1063,11 @@ export default function App() {
     setIsSettingsOpen(true);
   }, [closeAllPanels]);
 
+  const openAgentDrawer = useCallback(() => {
+    closeAllPanels();
+    setIsAgentDrawerOpen(true);
+  }, [closeAllPanels]);
+
   const openRender = useCallback(() => {
     closeAllPanels();
     setIsRenderOpen(true);
@@ -1188,6 +1194,7 @@ export default function App() {
         projectName={activeProject?.name}
         onBackToDashboard={handleReturnToDashboard}
         onOpenSettings={openSettings}
+        onOpenAgent={openAgentDrawer}
       />
 
       {/* 2. SPLIT LAYOUT: Remotion Player (atas) | Divider (drag) | AI Chat (bawah) */}
@@ -1250,6 +1257,7 @@ export default function App() {
               }
               agentStatus={agentStatus}
               agentStatusDetail={agentStatusDetail}
+              currentAgentStep={currentAgentStep}
               onSendMessage={handleSendMessage}
               onStopAgent={handleStopAgent}
               isPreparingProject={Boolean(

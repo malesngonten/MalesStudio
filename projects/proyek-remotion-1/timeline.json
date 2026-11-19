@@ -1,7 +1,73 @@
 {
   "fps": 30,
-  "durationInFrames": 150,
+  "durationInFrames": 300,
   "width": 1080,
   "height": 1920,
-  "layers": []
+  "layers": [
+    {
+      "id": "layer-bg",
+      "type": "element",
+      "name": "Background",
+      "clips": [
+        {
+          "id": "clip-bg-1",
+          "from": 0,
+          "duration": 300,
+          "name": "Gradient background",
+          "elementSlug": "shader-gem-smoke",
+          "elementProps": {
+            "speed": 1,
+            "colorBack": "#0a0a10",
+            "innerDistortion": 0.8,
+            "outerDistortion": 0.6,
+            "size": 0.8
+          },
+          "elementFile": "src/components/shader-gem-smoke.element.tsx"
+        }
+      ]
+    },
+    {
+      "id": "layer-text",
+      "type": "text",
+      "name": "Headline",
+      "clips": [
+        {
+          "id": "clip-text-1",
+          "from": 20,
+          "duration": 120,
+          "name": "Headline",
+          "props": {
+            "text": "Males Ngonten Studio",
+            "fontSize": 96,
+            "color": "#ffffff",
+            "animation": "slide-up",
+            "x": 50,
+            "y": 42
+          }
+        }
+      ]
+    },
+    {
+      "id": "layer-cta",
+      "type": "element",
+      "name": "CTA",
+      "clips": [
+        {
+          "id": "clip-cta-1",
+          "from": 180,
+          "duration": 60,
+          "name": "Call to action",
+          "elementSlug": "shader-gem-smoke",
+          "elementProps": {
+            "speed": 1,
+            "colorBack": "#c92a2a",
+            "innerDistortion": 0.3,
+            "outerDistortion": 0.2,
+            "size": 1.2
+          },
+          "elementFile": "src/components/shader-gem-smoke.element.tsx"
+        }
+      ]
+    }
+  ]
 }

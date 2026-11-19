@@ -32,6 +32,8 @@ interface ChatPanelProps {
   isAgentWorking: boolean;
   agentStatus?: 'idle' | 'connecting' | 'thinking' | 'executing_tool' | 'streaming' | 'error';
   agentStatusDetail?: { round?: number; maxRounds?: number; note?: string };
+  /** Langkah saat ini yang sedang dikerjakan agent (mis. "Menginstal rough.js...") */
+  currentAgentStep?: string;
   onSendMessage: (text: string, attachments: AgentAttachment[]) => void;
   onStopAgent: () => void;
   currentSec: string;
@@ -198,6 +200,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   isAgentWorking,
   agentStatus,
   agentStatusDetail,
+  currentAgentStep = '',
   onSendMessage,
   onStopAgent,
   currentSec,
@@ -659,6 +662,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                 agentStatus={isStreamingMessage ? agentStatus : undefined}
                 agentStatusDetail={isStreamingMessage ? agentStatusDetail : undefined}
                 agentWorkingSeconds={isStreamingMessage ? agentWorkingSeconds : 0}
+                currentAgentStep={isStreamingMessage ? currentAgentStep : undefined}
               />
             </div>
           );

@@ -63,7 +63,7 @@ export const StreamingIndicator: React.FC<StreamingIndicatorProps> = ({
           )}
         </span>
         {displayNote && (
-          <span className="text-[11px] text-zinc-500 ml-1 break-words">
+          <span className="text-sm text-zinc-300 ml-1 break-words font-sans">
             {displayNote}
           </span>
         )}

@@ -42,6 +42,7 @@
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
     "remotion": "4.0.541",
+    "roughjs": "^4.6.6",
     "sharp": "^0.35.5",
     "swr": "^2.5.1",
     "tailwind-merge": "^3.7.0",

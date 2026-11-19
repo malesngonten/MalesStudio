@@ -16,6 +16,8 @@ interface MessageBubbleProps {
   agentStatusDetail?: { round?: number; maxRounds?: number; note?: string };
   /** Seconds agent has been working */
   agentWorkingSeconds?: number;
+  /** Langkah saat ini yang sedang dikerjakan agent (mis. "Menginstal rough.js...") */
+  currentAgentStep?: string;
 }
 
 const toolIconMap: Record<string, React.ElementType> = {
@@ -57,6 +59,7 @@ const MessageBubbleComponent: React.FC<MessageBubbleProps> = ({
   agentStatusDetail,
   agentStatus,
   agentWorkingSeconds = 0,
+  currentAgentStep = '',
 }) => {
   const isStreaming =
     !isUser && msg.role === 'assistant' && msg.id === streamingMessageId;
@@ -160,7 +163,7 @@ const MessageBubbleComponent: React.FC<MessageBubbleProps> = ({
               round={agentStatusDetail?.round}
               maxRounds={agentStatusDetail?.maxRounds}
               workingSeconds={agentWorkingSeconds}
-              note={agentStatusDetail?.note}
+              note={currentAgentStep || agentStatusDetail?.note}
               isStreamingTokens={msg.content.length > 0}
             />
             {/* Plain text while streaming: parsing Markdown on every token is
