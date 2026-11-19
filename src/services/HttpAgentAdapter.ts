@@ -836,15 +836,6 @@ export class HttpAgentAdapter implements IAgentClient {
         latencyMs: 15,
         isSelected: true,
       },
-      {
-        id: 'agent-claude',
-        name: 'Claude Code CLI (Anthropic)',
-        command: 'claude --acp',
-        protocol: 'acp',
-        status: 'not_found',
-        description: 'Agent coding canggih via protokol ACP stdio.',
-        supportedTools: ['readFile', 'writeFile', 'runBashCommand'],
-      },
     ];
   }
 

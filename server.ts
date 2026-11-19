@@ -1214,19 +1214,6 @@ function checkBinary(name: string): { exists: boolean; path?: string; version?: 
 }
 
 function discoverLocalAgents() {
-  const claudeCheck = checkBinary('claude');
-  const geminiCheck = checkBinary('gemini');
-  const ollamaCheck = checkBinary('ollama');
-
-  // Check Ollama HTTP if binary not in PATH
-  let ollamaHttpReady = false;
-  try {
-    const curl = spawnSync('curl', ['-s', 'http://127.0.0.1:11434/api/tags'], { encoding: 'utf-8', timeout: 800 });
-    if (curl.status === 0 && curl.stdout.includes('models')) {
-      ollamaHttpReady = true;
-    }
-  } catch {}
-
   const agents = [
     {
       id: 'agent-builtin',
@@ -1235,34 +1222,10 @@ function discoverLocalAgents() {
       protocol: 'acp',
       version: '1.0.0-core',
       status: 'ready',
-      description: 'Engine otonom lokal terintegrasi dengan akses terminal penuh (runBashCommand). Bisa install dependency, menjalankan perintah shell, dan mengakses internet seperti AI agent code (OpenCode/Codex). Tanpa ketergantungan binary eksternal.',
+      description: 'Engine otonom lokal yang mengonalkannya dengan AI provider via BYOK (OpenAI-Compatible). Mengedit timeline.json dan Remotion TSX tanpa ketergantungan binary eksternal.',
       supportedTools: ['readFile', 'writeFile', 'listDirectory', 'modifyTimeline', 'gitCheckpoint', 'runBashCommand', 'webSearch', 'webRead'],
       latencyMs: 12,
       isSelected: selectedAgentId === 'agent-builtin',
-    },
-    {
-      id: 'agent-claude',
-      name: 'Claude Code CLI (Anthropic)',
-      command: 'claude --acp',
-      protocol: 'acp',
-      version: claudeCheck.version,
-      status: claudeCheck.exists ? 'ready' : 'not_found',
-      description: 'Agent coding canggih via protokol ACP (stdio). Memerlukan Claude CLI terpasang di host/proot.',
-      supportedTools: ['readFile', 'writeFile', 'runBashCommand', 'gitCommit'],
-      latencyMs: claudeCheck.exists ? 45 : undefined,
-      isSelected: selectedAgentId === 'agent-claude',
-    },
-    {
-      id: 'agent-ollama',
-      name: 'Ollama Local LLM (DeepSeek / Qwen / Llama)',
-      command: 'ollama run deepseek-coder:6.7b',
-      protocol: 'http',
-      version: ollamaCheck.version || (ollamaHttpReady ? 'HTTP ready' : undefined),
-      status: ollamaCheck.exists || ollamaHttpReady ? 'ready' : 'not_found',
-      description: 'Model AI lokal offline 100% tanpa internet. Cocok untuk privasi total jika HP/server memiliki RAM cukup.',
-      supportedTools: ['readFile', 'writeFile'],
-      latencyMs: ollamaHttpReady ? 120 : undefined,
-      isSelected: selectedAgentId === 'agent-ollama',
     },
   ];
 
