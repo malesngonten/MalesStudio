@@ -3234,41 +3234,8 @@ app.post('/api/agent/prompt', async (req, res) => {
 
   const extraAgentContext = typeof agentContext === 'string' ? agentContext.trim() : '';
 
-  // Deteksi pesan percakapan sederhana (salam / uji coba) — jawab langsung tanpa
-  // memicu AI provider, tanpa menjalankan tool, dan tanpa membaca file proyek.
-  const SIMPLE_GREETINGS = new Set([
-    'halo', 'hai', 'hello', 'hi', 'hey', 'test', 'apa kabar',
-    'selamat pagi', 'selamat siang', 'selamat sore', 'selamat malam',
-    'siapa kamu', 'siapa anda', 'kamu siapa', 'anda siapa', 'lu siapa',
-    'aku siapa', 'siapa ai', 'siapa kamu ai', 'apa itu kamu', 'kenalkan diri',
-    'apa yang bisa kamu lakukan', 'kemampuan kamu', 'tool kamu'
-  ]);
-  const normalizedText = (text || '').trim().toLowerCase();
-  const isSimpleGreeting = SIMPLE_GREETINGS.has(normalizedText) || normalizedText.length <= 2;
-
-  if (isSimpleGreeting) {
-    setAgentStatus('idle');
-
-    const greetingReply = 'Halo! Ada yang bisa saya bantu untuk video Remotion Anda hari ini?';
-    aiMessage.content = greetingReply;
-    aiMessage.text = greetingReply;
-    aiMessage.status = 'completed';
-    broadcastSSE('message_complete', {
-      messageId: aiMsgId,
-      sessionId: currentSession.id,
-      message: aiMessage,
-    });
-
-    persistSession(currentSession);
-    return res.json({
-      success: true,
-      messageId: aiMsgId,
-      sessionId: currentSession.id,
-      message: aiMessage,
-      status: 'completed',
-    });
-  }
-
+  // Semua pertanyaan — termasuk salam dan uji coba — harus dijawab oleh AI provider (BYOK),
+  // bukan oleh placeholder jawaban lokal. Tidak ada lagi deteksi greeting yang membypass AI.
   res.json({ success: true, messageId: aiMsgId, sessionId: currentSession.id });
 
   // Run Agent Processing in background
