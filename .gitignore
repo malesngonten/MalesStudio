@@ -7,3 +7,5 @@ coverage/
 .ai_usage.json
 .env*
 !.env.example
+projects/proj_*/
+projects/*/.git/
