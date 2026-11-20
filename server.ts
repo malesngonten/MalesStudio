@@ -1416,6 +1416,15 @@ function finalizeText(
   writesExecuted: number
 ): string {
   const text = (rawText || '').trim();
+
+  // Jika AI klaim berhasil membuat/mengubah video/timeline tetapi tidak ada
+  // tulisan file yang dieksekusi (writesExecuted === 0) dan bukan tugas video,
+  // jangan percayai klaim palsu — berikan respons jujur agar user tidak ditipu.
+  const hasVideoSuccessClaim = /(berhasil|diperbarui|sudah tersimpan|selesai dibuat|layer|klip|durasi \d)/i.test(text);
+  if (hasVideoSuccessClaim && !isVideoTask && writesExecuted === 0) {
+    return 'Maaf, saya belum dapat melakukan perubahan video atau timeline karena tidak ada perintah yang dieksekusi. Silakan coba lagi atau jelaskan lebih spesifik apa yang ingin Anda ubah.';
+  }
+
   if (!text || looksLikeTechnicalProcess(text)) {
     return buildCompletionMessage(isVideoTask, timeline, writesExecuted);
   }
@@ -3229,7 +3238,10 @@ app.post('/api/agent/prompt', async (req, res) => {
   // memicu AI provider, tanpa menjalankan tool, dan tanpa membaca file proyek.
   const SIMPLE_GREETINGS = new Set([
     'halo', 'hai', 'hello', 'hi', 'hey', 'test', 'apa kabar',
-    'selamat pagi', 'selamat siang', 'selamat sore', 'selamat malam'
+    'selamat pagi', 'selamat siang', 'selamat sore', 'selamat malam',
+    'siapa kamu', 'siapa anda', 'kamu siapa', 'anda siapa', 'lu siapa',
+    'aku siapa', 'siapa ai', 'siapa kamu ai', 'apa itu kamu', 'kenalkan diri',
+    'apa yang bisa kamu lakukan', 'kemampuan kamu', 'tool kamu'
   ]);
   const normalizedText = (text || '').trim().toLowerCase();
   const isSimpleGreeting = SIMPLE_GREETINGS.has(normalizedText) || normalizedText.length <= 2;
@@ -3721,7 +3733,7 @@ OUTPUT FORMAT (WAJIB): Balas HANYA JSON dengan field:
 - "summary": string (ringkasan singkat)
 - "currentStep": string (deskripsi singkat max 60 char apa yang KAMU sedang lakukan SEKARANG, contoh: "Menulis timeline.json", "Membuat komponen Hero", "Riset warna brand", "Menerapkan animasi fade")
 - "toolCalls": array (lihat tools di atas)
-${buildRepoContextPrompt()}
+${isVideoTask ? buildRepoContextPrompt() : ''}
 User request:
 "${text}"`;
 
