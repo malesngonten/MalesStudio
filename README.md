@@ -49,7 +49,7 @@
 │            Backend Node.js API (server.ts / Express)            │
 │  - Agent Discovery Service (Checks PATH for Claude/Gemini/Ollama)│
 │  - ACP Protocol Bridge (Stdio transport / Intelligent Runner)    │
-│  - Local Workspace Manager (projects/proyek-remotion-1)          │
+│  - Local Workspace Manager (projects/)                          │
 │  - System Hardware Diagnostics (RAM, ARM64, Binaries)           │
 │  - Remotion Render Runner (scripts/render-cli.mjs)              │
 └─────────────────────────────────────────────────────────────────┘

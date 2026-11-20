@@ -21,14 +21,13 @@ import * as ReactDOM from 'react-dom';
 import * as ReactDOMClient from 'react-dom/client';
 
 const ACTIVE_PROJECT_KEY = 'males_studio_active_project';
-const DEFAULT_PROJECT_ID = 'proyek-remotion-1';
 
-function getActiveProjectId(): string {
+function getActiveProjectId(): string | null {
   try {
     const stored = localStorage.getItem(ACTIVE_PROJECT_KEY);
     if (stored && /^[A-Za-z0-9_-]+$/.test(stored)) return stored;
   } catch {}
-  return DEFAULT_PROJECT_ID;
+  return null;
 }
 
 function hashString(value: string): string {

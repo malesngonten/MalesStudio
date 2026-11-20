@@ -72,20 +72,19 @@ app.use((err: any, req: any, res: any, next: any) => {
 // Directories
 const WORKSPACE_DIR = process.cwd();
 const PROJECTS_BASE = path.join(WORKSPACE_DIR, 'projects');
-const DEFAULT_PROJECT_ID = 'proyek-remotion-1';
-let ACTIVE_PROJECT_DIR = path.join(PROJECTS_BASE, DEFAULT_PROJECT_ID);
 const OUT_DIR = path.join(WORKSPACE_DIR, 'out');
-let ASSETS_DIR = path.join(ACTIVE_PROJECT_DIR, 'public', 'assets');
-let CHATS_DIR = path.join(ACTIVE_PROJECT_DIR, '.males_ngonten', 'chats');
-let CHECKPOINTS_DIR = path.join(ACTIVE_PROJECT_DIR, '.males_ngonten', 'checkpoints');
-let CHECKPOINTS_INDEX_PATH = path.join(CHECKPOINTS_DIR, 'index.json');
+let ACTIVE_PROJECT_DIR: string | null = null;
+let ASSETS_DIR: string | null = null;
+let CHATS_DIR: string | null = null;
+let CHECKPOINTS_DIR: string | null = null;
+let CHECKPOINTS_INDEX_PATH: string | null = null;
 const PROJECTS_INDEX_PATH = path.join(PROJECTS_BASE, 'projects.json');
 const SCRIPTS_DIR = path.join(WORKSPACE_DIR, 'scripts');
 const REMOCN_CATALOG_PATH = path.join(WORKSPACE_DIR, 'src', 'remotion', 'elements', 'remocn-catalog.json');
 const AGENT_TASKS_DIR = path.join(WORKSPACE_DIR, '.males_ngonten', 'agent-tasks');
 
 // Ensure base project directories exist
-[PROJECTS_BASE, ACTIVE_PROJECT_DIR, OUT_DIR, ASSETS_DIR, CHATS_DIR, CHECKPOINTS_DIR, path.join(ACTIVE_PROJECT_DIR, 'src'), SCRIPTS_DIR, AGENT_TASKS_DIR].forEach((dir) => {
+[PROJECTS_BASE, OUT_DIR, SCRIPTS_DIR, AGENT_TASKS_DIR].forEach((dir) => {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
@@ -109,7 +108,10 @@ function ensureGitRepo(targetDir?: string) {
   spawnSync('git', ['config', 'user.email', 'agent@malesngonten.studio'], { cwd: dir, encoding: 'utf-8' });
 }
 
-ensureGitRepo();
+// Initialize git repo for default project only if it exists
+if (ACTIVE_PROJECT_DIR) {
+  ensureGitRepo();
+}
 
 // ========================================================
 // AGENT TASK PERSISTENCE (untuk resume setelah browser ditutup)
@@ -493,28 +495,6 @@ function projectDirFor(id: string): string {
   return path.join(PROJECTS_BASE, id);
 }
 
-function defaultProjectMeta(): ServerProject {
-  const stat = fs.existsSync(ACTIVE_PROJECT_DIR)
-    ? fs.statSync(ACTIVE_PROJECT_DIR)
-    : null;
-  const created = stat ? stat.birthtimeMs || stat.ctimeMs : Date.now();
-  return {
-    id: DEFAULT_PROJECT_ID,
-    name: 'Proyek Remotion 1',
-    description: 'Project bawaan MalesStudio',
-    createdAt: created,
-    updatedAt: created,
-    lastEditedAt: created,
-    deletedAt: null,
-    aspectRatio: '9:16',
-    width: 1080,
-    height: 1920,
-    durationInFrames: 150,
-    fps: 30,
-    status: 'draft',
-  };
-}
-
 function readProjectsIndex(): ServerProject[] {
   try {
     if (fs.existsSync(PROJECTS_INDEX_PATH)) {
@@ -538,12 +518,6 @@ function writeProjectsIndex(projects: ServerProject[]): void {
 function ensureProjectIndex(): void {
   const projects = readProjectsIndex();
   let changed = false;
-
-  // Register the legacy default project if it exists on disk.
-  if (fs.existsSync(ACTIVE_PROJECT_DIR) && !projects.some((p) => p.id === DEFAULT_PROJECT_ID)) {
-    projects.unshift(defaultProjectMeta());
-    changed = true;
-  }
 
   // Discover project folders created outside the API.
   try {
