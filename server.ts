@@ -3393,9 +3393,10 @@ app.post('/api/agent/prompt', async (req, res) => {
       // - CHAT mode: greetings/general questions → plain text response, no tools
       // - EDIT/ACT mode: video production requests → JSON with tool calls (file ops, terminal, render)
       const isEmptyProject = !timelineHasContent(currentTimelineData);
-      // Saat project baru (timeline kosong), AI harus otomatis masuk ke mode pembuatan video
-      // tanpa menunggu kata kunci spesifik dari user.
-      const isVideoTask = isVideoCreationRequest(text || '') || isEmptyProject;
+      // Hanya input yang benar-benar mengandung kata kunci pembuatan video
+      // yang memicu mode editing. Pertanyaan umum (siapa kamu, halo, dst.)
+      // dijawab dalam mode CHAT/QA meskipun project masih baru.
+      const isVideoTask = isVideoCreationRequest(text || '');
       const timelineJsonForPrompt = JSON.stringify(currentTimelineData, null, 2);
       const timelinePromptText =
         timelineJsonForPrompt.length > 30_000
